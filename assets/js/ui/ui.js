@@ -82,13 +82,12 @@
         input = U.el('textarea', { rows: f.rows || 5, placeholder: f.placeholder || '' });
         input.value = f.value || '';
       } else if (f.type === 'checkbox') {
+        var cb = U.el('input', { type: 'checkbox' });
+        cb.checked = !!f.value;
+        cb.dataset.field = f.key;
         input = U.el('span.row', {}, [
           U.el('label.switch' + (f.size === 'sm' ? '.sm' : ''), {}, [
-            (function () {
-              var c = U.el('input', { type: 'checkbox' });
-              c.checked = !!f.value;
-              return c;
-            })(),
+            cb,
             U.el('span.track')
           ]),
           U.el('span.small.muted', { text: f.desc || '' })
@@ -100,7 +99,7 @@
         if (f.step != null) input.setAttribute('step', f.step);
         input.value = f.value == null ? '' : f.value;
       }
-      input.dataset.field = f.key;
+      if (f.type !== 'checkbox') input.dataset.field = f.key;
       row.appendChild(input);
       if (f.desc && f.type !== 'checkbox') row.appendChild(U.el('div.desc', { text: f.desc }));
       root.appendChild(row);
