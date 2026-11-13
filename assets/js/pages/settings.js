@@ -88,7 +88,11 @@
           },
           { key: 'username', label: 'MQTT 用户名', value: m.username, desc: '建议为每台设备单独创建账号，便于吊销。' },
           { key: 'password', label: 'MQTT 密码', type: 'password', value: m.password, desc: '仅保存在本机 localStorage，不会随代码发布。' },
-          { key: 'clientPrefix', label: '网页客户端 ID 前缀', value: m.clientPrefix }
+          { key: 'clientPrefix', label: '网页客户端 ID 前缀', value: m.clientPrefix },
+          {
+            key: 'autoReconnect', label: '断线自动重连', type: 'checkbox', size: 'sm', value: m.autoReconnect !== false,
+            desc: '连接断开后自动重连；关闭后断线不再自动恢复，需在「设备管理」点「重连」手动恢复。'
+          }
         ];
         var form = ESP.ui.buildForm(fields);
         var resultBox = U.el('div.banner.info.hide', {});
@@ -267,7 +271,8 @@
         secure: v.secure !== false,
         username: v.username,
         password: v.password,
-        clientPrefix: v.clientPrefix || 'esp32s3-web'
+        clientPrefix: v.clientPrefix || 'esp32s3-web',
+        autoReconnect: v.autoReconnect !== false
       }
     });
     ESP.ui.toast('MQTT 配置已保存', 'ok');
@@ -305,7 +310,7 @@
     ESP.ui.confirm('清空 MQTT 凭证', '将删除本机保存的 Broker 地址与用户名密码。', '清空').then(function (ok) {
       if (!ok) return;
       ESP.store.updateSettings({
-        mqtt: { enabled: false, host: '', port: 8084, path: '/mqtt', secure: true, username: '', password: '', clientPrefix: 'esp32s3-web', keepalive: 60 }
+        mqtt: { enabled: false, host: '', port: 8084, path: '/mqtt', secure: true, username: '', password: '', clientPrefix: 'esp32s3-web', keepalive: 60, autoReconnect: true }
       });
       ESP.ui.toast('已清空', 'ok');
       ESP.app.renderPage();
