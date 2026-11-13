@@ -28,7 +28,8 @@
         username: '',
         password: '',
         clientPrefix: 'esp32s3-web',
-        keepalive: 60
+        keepalive: 60,
+        autoReconnect: true
       },
       cloud: {
         enabled: false,
