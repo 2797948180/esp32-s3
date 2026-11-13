@@ -73,9 +73,12 @@
     this.subAckWait = Object.create(null);
     this.pending = Object.create(null);          // command_id -> {resolve,reject,timer}
     this.pingTimer = null;
+    this.connackTimer = null;
     this.retryDelay = 1000;
     this.reconnectTimer = null;
     this.stopped = true;
+    this.autoReconnect = opts.autoReconnect !== false;
+    this.lastRx = Date.now();
     this.rxBuffer = null;
     this.rxOffset = 0;
   }
@@ -89,19 +92,21 @@
   MqttClient.prototype.connect = function () {
     var self = this;
     this.stopped = false;
+    this.lastRx = Date.now();
     if (typeof WebSocket === 'undefined') { this.fail(new Error('当前环境不支持 WebSocket')); return; }
     try { this.ws = new WebSocket(this.opts.url, 'mqtt'); }
     catch (e) { this.fail(e); return; }
     this.ws.binaryType = 'arraybuffer';
 
     this.ws.onopen = function () { self.sendConnect(); };
-    this.ws.onmessage = function (ev) { self.feed(ev.data); };
+    this.ws.onmessage = function (ev) { self.lastRx = Date.now(); self.feed(ev.data); };
     this.ws.onerror = function (e) { /* close 里统一处理 */ };
     this.ws.onclose = function () {
       self.connected = false;
       clearInterval(self.pingTimer);
+      clearTimeout(self.connackTimer);
       self.flushPending(new Error('MQTT 连接已断开'));
-      if (!self.stopped) self.scheduleReconnect();
+      self.scheduleReconnect();
       if (self.opts.onClose) self.opts.onClose();
     };
   };
@@ -109,6 +114,7 @@
   MqttClient.prototype.close = function () {
     this.stopped = true;
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.connackTimer);
     clearInterval(this.pingTimer);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try { this.ws.send(buildPacket(0xe0, [])); } catch (e) { }
@@ -125,9 +131,10 @@
 
   MqttClient.prototype.scheduleReconnect = function () {
     var self = this;
-    if (this.stopped || this.reconnectTimer) return;
+    if (this.stopped || !this.autoReconnect || this.reconnectTimer) return;
     var d = Math.min(this.retryDelay, 20000);
     this.retryDelay = Math.min(this.retryDelay * 2, 20000);
+    if (this.opts.onReconnecting) this.opts.onReconnecting(d);
     this.reconnectTimer = setTimeout(function () { self.reconnectTimer = null; self.connect(); }, d);
   };
 
@@ -158,13 +165,19 @@
 
     this.pingTimer = setInterval(function () {
       try { self.send(buildPacket(0xc0, [])); } catch (e) { }
+      // 心跳看门狗：超过 1.5 倍 keepalive 未收到任何数据包，判定链路已死，强制断开触发重连
+      if (Date.now() - self.lastRx > (o.keepalive || 60) * 1500) {
+        clearInterval(self.pingTimer);
+        try { self.ws.close(); } catch (e) { }
+      }
     }, (o.keepalive || 60) * 1000 / 2);
 
-    // CONNACK 超时保护
-    setTimeout(function () {
-      if (!self.connected && self.ws && self.ws.readyState === WebSocket.OPEN) {
+    // CONNACK 超时保护（绑定本次连接的 ws，避免旧定时器误伤重连后的新连接）
+    var ws = this.ws;
+    this.connackTimer = setTimeout(function () {
+      if (!self.connected && self.ws === ws && ws.readyState === WebSocket.OPEN) {
         self.fail(new Error('MQTT 认证失败或 Broker 未响应（请检查地址/用户名/密码）'));
-        try { self.ws.close(); } catch (e) { }
+        try { ws.close(); } catch (e) { }
       }
     }, 8000);
   };
@@ -323,13 +336,17 @@
       clientId: (s.clientPrefix || 'esp32s3-web') + '-' + U.shortId(8),
       username: s.username || undefined,
       password: s.password || undefined,
-      keepalive: s.keepalive || 60,
+      keepalive: Math.min(s.keepalive || 30, 30),   // 上限 30s，适配 EMQX Serverless 连接策略
+      autoReconnect: s.autoReconnect !== false,
       topics: [this.topic('response'), this.topic('status'), this.topic('heartbeat')],
       onConnect: function () {
         ESP.bus.emit('log', { level: 'ok', action: 'MQTT', message: '云端 Broker 连接成功（' + url + '）', deviceId: self.device.id });
         self.setOnline(false);                               // 仍需等待设备自身上线
         // 主动请求一次状态
         self.invoke('state', {});
+      },
+      onReconnecting: function (delay) {
+        ESP.bus.emit('log', { level: 'warn', action: 'MQTT', message: '云端连接已断开，' + Math.round(delay / 1000) + ' 秒后自动重连…', deviceId: self.device.id });
       },
       onClose: function () { self.setOnline(false); },
       onError: function (e) { ESP.bus.emit('log', { level: 'error', action: 'MQTT', message: e.message, deviceId: self.device.id }); },
