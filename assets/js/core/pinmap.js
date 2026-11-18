@@ -181,7 +181,7 @@
       board: boardById(boardId),
       pwm: {
         channels: CHIP.pwmChannels,
-        resolutions: [1, 8, 10, 12, 14],
+        resolutions: [8, 10, 12, 14],
         defaultResolution: 10,
         minFreq: 10,
         maxFreq: 80000000,
