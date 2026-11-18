@@ -91,7 +91,7 @@
           { key: 'clientPrefix', label: '网页客户端 ID 前缀', value: m.clientPrefix },
           {
             key: 'autoReconnect', label: '断线自动重连', type: 'checkbox', size: 'sm', value: m.autoReconnect !== false,
-            desc: '连接断开后自动重连；关闭后断线不再自动恢复，需在「设备管理」点「重连」手动恢复。'
+            desc: '连接断开后自动重连；关闭则掉线后保持离线，需手动刷新页面重连'
           }
         ];
         var form = ESP.ui.buildForm(fields);
@@ -310,7 +310,7 @@
     ESP.ui.confirm('清空 MQTT 凭证', '将删除本机保存的 Broker 地址与用户名密码。', '清空').then(function (ok) {
       if (!ok) return;
       ESP.store.updateSettings({
-        mqtt: { enabled: false, host: '', port: 8084, path: '/mqtt', secure: true, username: '', password: '', clientPrefix: 'esp32s3-web', keepalive: 60, autoReconnect: true }
+        mqtt: { enabled: false, host: '', port: 8084, path: '/mqtt', secure: true, username: '', password: '', clientPrefix: 'esp32s3-web', keepalive: 60 }
       });
       ESP.ui.toast('已清空', 'ok');
       ESP.app.renderPage();
