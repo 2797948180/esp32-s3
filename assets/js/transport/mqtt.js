@@ -73,12 +73,13 @@
     this.subAckWait = Object.create(null);
     this.pending = Object.create(null);          // command_id -> {resolve,reject,timer}
     this.pingTimer = null;
+    this.watchdogTimer = null;
     this.connackTimer = null;
+    this.lastRx = 0;
     this.retryDelay = 1000;
     this.reconnectTimer = null;
     this.stopped = true;
     this.autoReconnect = opts.autoReconnect !== false;
-    this.lastRx = Date.now();
     this.rxBuffer = null;
     this.rxOffset = 0;
   }
@@ -92,30 +93,43 @@
   MqttClient.prototype.connect = function () {
     var self = this;
     this.stopped = false;
-    this.lastRx = Date.now();
     if (typeof WebSocket === 'undefined') { this.fail(new Error('当前环境不支持 WebSocket')); return; }
-    try { this.ws = new WebSocket(this.opts.url, 'mqtt'); }
+    var ws;
+    try { ws = new WebSocket(this.opts.url, 'mqtt'); this.ws = ws; }
     catch (e) { this.fail(e); return; }
-    this.ws.binaryType = 'arraybuffer';
+    ws.binaryType = 'arraybuffer';
 
-    this.ws.onopen = function () { self.sendConnect(); };
-    this.ws.onmessage = function (ev) { self.lastRx = Date.now(); self.feed(ev.data); };
-    this.ws.onerror = function (e) { /* close 里统一处理 */ };
-    this.ws.onclose = function () {
+    ws.onopen = function () {
+      if (self.ws !== ws) return;
+      self.lastRx = Date.now();
+      self.sendConnect(ws);
+    };
+    ws.onmessage = function (ev) {
+      if (self.ws !== ws) return;
+      self.lastRx = Date.now();
+      self.feed(ev.data);
+    };
+    ws.onerror = function () { /* close 里统一处理 */ };
+    ws.onclose = function (ev) {
+      if (self.ws !== ws) return;
       self.connected = false;
       clearInterval(self.pingTimer);
+      clearInterval(self.watchdogTimer);
       clearTimeout(self.connackTimer);
+      self.pingTimer = self.watchdogTimer = self.connackTimer = null;
       self.flushPending(new Error('MQTT 连接已断开'));
-      self.scheduleReconnect();
-      if (self.opts.onClose) self.opts.onClose();
+      if (!self.stopped) self.scheduleReconnect();
+      if (self.opts.onClose) self.opts.onClose({ code: ev.code, reason: ev.reason, wasClean: ev.wasClean });
     };
   };
 
   MqttClient.prototype.close = function () {
     this.stopped = true;
     clearTimeout(this.reconnectTimer);
-    clearTimeout(this.connackTimer);
     clearInterval(this.pingTimer);
+    clearInterval(this.watchdogTimer);
+    clearTimeout(this.connackTimer);
+    this.pingTimer = this.watchdogTimer = this.connackTimer = null;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try { this.ws.send(buildPacket(0xe0, [])); } catch (e) { }
     }
@@ -134,7 +148,7 @@
     if (this.stopped || !this.autoReconnect || this.reconnectTimer) return;
     var d = Math.min(this.retryDelay, 20000);
     this.retryDelay = Math.min(this.retryDelay * 2, 20000);
-    if (this.opts.onReconnecting) this.opts.onReconnecting(d);
+    if (this.opts.onRetry) this.opts.onRetry(d);
     this.reconnectTimer = setTimeout(function () { self.reconnectTimer = null; self.connect(); }, d);
   };
 
@@ -143,7 +157,7 @@
     this.ws.send(arr);
   };
 
-  MqttClient.prototype.sendConnect = function () {
+  MqttClient.prototype.sendConnect = function (ws) {
     var self = this;
     var o = this.opts;
     var w = new Writer();
@@ -160,22 +174,29 @@
     if (o.username) w.str(o.username);
     if (o.password) w.str(o.password);
 
-    try { this.send(buildPacket(0x10, w.toArray())); }
-    catch (e) { return this.fail(e); }
+    try { ws.send(buildPacket(0x10, w.toArray())); }
+    catch (e) { this.fail(e); try { ws.close(); } catch (closeError) { } return; }
 
+    clearInterval(this.pingTimer);
+    clearInterval(this.watchdogTimer);
+    clearTimeout(this.connackTimer);
     this.pingTimer = setInterval(function () {
-      try { self.send(buildPacket(0xc0, [])); } catch (e) { }
-      // 心跳看门狗：超过 1.5 倍 keepalive 未收到任何数据包，判定链路已死，强制断开触发重连
-      if (Date.now() - self.lastRx > (o.keepalive || 60) * 1500) {
-        clearInterval(self.pingTimer);
-        try { self.ws.close(); } catch (e) { }
-      }
+      if (self.ws !== ws || !self.connected) return;
+      try { ws.send(buildPacket(0xc0, [])); }
+      catch (e) { try { ws.close(); } catch (closeError) { } }
     }, (o.keepalive || 60) * 1000 / 2);
 
-    // CONNACK 超时保护（绑定本次连接的 ws，避免旧定时器误伤重连后的新连接）
-    var ws = this.ws;
+    // Broker 未响应心跳时关闭当前 socket，由 onclose 统一重连。
+    this.watchdogTimer = setInterval(function () {
+      if (self.ws === ws && self.connected && Date.now() - self.lastRx > (o.keepalive || 60) * 1500) {
+        if (self.opts.onError) self.opts.onError(new Error('MQTT 心跳响应超时，正在重连'));
+        try { ws.close(); } catch (e) { }
+      }
+    }, Math.max(1000, (o.keepalive || 60) * 1000 / 2));
+
+    // CONNACK 超时保护，超时只关闭发起本次 CONNECT 的 socket。
     this.connackTimer = setTimeout(function () {
-      if (!self.connected && self.ws === ws && ws.readyState === WebSocket.OPEN) {
+      if (self.ws === ws && !self.connected && ws.readyState === WebSocket.OPEN) {
         self.fail(new Error('MQTT 认证失败或 Broker 未响应（请检查地址/用户名/密码）'));
         try { ws.close(); } catch (e) { }
       }
@@ -260,8 +281,11 @@
       if (body.length < 2) return;
       if (body[1] !== 0) {
         this.fail(new Error('MQTT Broker 拒绝连接，返回码 ' + body[1]));
+        if (this.ws) { try { this.ws.close(); } catch (e) { } }
         return;
       }
+      clearTimeout(this.connackTimer);
+      this.connackTimer = null;
       this.connected = true;
       this.retryDelay = 1000;
       if (this.opts.onConnect) this.opts.onConnect();
@@ -336,20 +360,20 @@
       clientId: (s.clientPrefix || 'esp32s3-web') + '-' + U.shortId(8),
       username: s.username || undefined,
       password: s.password || undefined,
-      keepalive: Math.min(s.keepalive || 30, 30),   // 上限 30s，适配 EMQX Serverless 连接策略
+      keepalive: Math.min(s.keepalive || 30, 30),
       autoReconnect: s.autoReconnect !== false,
-      topics: [this.topic('response'), this.topic('status'), this.topic('heartbeat')],
+      topics: [this.topic('response'), this.topic('status'), this.topic('heartbeat'), this.topic('state')],
       onConnect: function () {
         ESP.bus.emit('log', { level: 'ok', action: 'MQTT', message: '云端 Broker 连接成功（' + url + '）', deviceId: self.device.id });
-        self.setOnline(false);                               // 仍需等待设备自身上线
         // 主动请求一次状态
         self.invoke('state', {});
       },
-      onReconnecting: function (delay) {
-        ESP.bus.emit('log', { level: 'warn', action: 'MQTT', message: '云端连接已断开，' + Math.round(delay / 1000) + ' 秒后自动重连…', deviceId: self.device.id });
+      onClose: function (info) {
+        var detail = info ? '（code=' + info.code + (info.reason ? ', reason=' + info.reason : '') + (info.wasClean ? ', clean' : '') + '）' : '';
+        ESP.bus.emit('log', { level: 'warn', action: 'MQTT', message: '浏览器到 Broker 的 WebSocket 已关闭' + detail, deviceId: self.device.id });
       },
-      onClose: function () { self.setOnline(false); },
       onError: function (e) { ESP.bus.emit('log', { level: 'error', action: 'MQTT', message: e.message, deviceId: self.device.id }); },
+      onRetry: function (delay) { ESP.bus.emit('log', { level: 'warn', action: 'MQTT', message: '连接断开，' + Math.round(delay / 1000) + ' 秒后自动重连', deviceId: self.device.id }); },
       onMessage: function (topic, payload) { self.onMessage(topic, payload); }
     });
     this.client.connect();
@@ -369,24 +393,43 @@
   };
 
   MqttTransport.prototype.onMessage = function (topic, payload) {
-    var self = this;
     var data;
     try { data = JSON.parse(payload); } catch (e) { return; }
     var suffix = topic.split('/').pop();
+    if (suffix === 'status' || suffix === 'heartbeat' || suffix === 'response' || suffix === 'state') {
+      this.lastDeviceMessage = Date.now();
+      if (this.cb.onSeen) this.cb.onSeen(this.lastDeviceMessage);
+    }
 
     if (suffix === 'status') {
       this.setOnline(data.online !== false);
       if (data.state) this.applyState(data.state);
       else this.applyState(data);
+    } else if (suffix === 'state') {
+      // 固件每 5s 主动发布的全量状态（device/pins/compass）
+      this.setOnline(true);
+      // 兼容：老固件 rssi 只在 device.wifi.rssi，提到顶层供 KPI/趋势图读取
+      if (data.device && data.device.rssi == null && data.device.wifi && data.device.wifi.rssi != null) {
+        data.device.rssi = data.device.wifi.rssi;
+      }
+      this.applyState(data);
     } else if (suffix === 'heartbeat') {
       this.lastHeartbeat = Date.now();
       this.setOnline(true);
-      if (this.lastState) {
-        var st = U.deepClone(this.lastState);
-        st.ts = Date.now();
-        if (st.device) { st.device.uptime_ms = data.uptime_ms; st.device.rssi = data.rssi; st.device.ip = data.ip || st.device.ip; }
-        this.applyState(st);
-      }
+      // 心跳字段直接补齐到状态里（固件全量状态可能尚未到达时也有数据）
+      var st = U.deepClone(this.lastState || { device: {} });
+      st.ts = Date.now();
+      if (!st.device) st.device = {};
+      st.device.uptime_ms = data.uptime_ms;
+      st.device.rssi = data.rssi;
+      st.device.ip = data.ip || st.device.ip;
+      st.device.heap_free = data.heap_free;
+      st.device.heap_size = data.heap_size;
+      st.device.mode = data.mode;
+      st.device.ssid = data.ssid;
+      st.device.firmware = data.firmware || st.device.firmware;
+      st.device.name = data.name || st.device.name;
+      this.applyState(st);
     } else if (suffix === 'response') {
       var cid = data.command_id;
       var p = cid && this.client && this.client.pending[cid];
