@@ -18,6 +18,62 @@
     return Object.keys(state.pins).map(function (k) { return state.pins[k]; });
   }
 
+  /* 仿真 SSD1306 OLED（128x64，2x 绘制）——用固件上传的 compass 数据还原屏幕画面 */
+  function drawSimOLED(canvas, state, page) {
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    var cp = (state && state.compass) || {};
+    var info = (state && state.compassInfo) || {};
+    var mode = (info.display_mode != null) ? info.display_mode : (page || 0);
+    var hasMag = cp.mag_ok !== false && cp.heading != null;
+    ctx.fillStyle = '#8fd0ff';
+    ctx.font = 'bold 15px ui-monospace,monospace';
+    ctx.textBaseline = 'top';
+
+    if (!hasMag) {
+      ctx.fillText('ENV STATION', 12, 14);
+      ctx.font = '12px ui-monospace,monospace';
+      ctx.fillText('SSD1306 128x64 (I2C)', 12, 38);
+      ctx.fillText('no compass data', 12, 56);
+      return;
+    }
+    if (mode === 0) {
+      // 罗盘页：表盘 + 方位 + 指针 + HDG
+      var cx = W / 2, cy = H / 2 + 6, r = 44;
+      ctx.strokeStyle = '#4a7fb5'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.font = 'bold 12px ui-monospace,monospace'; ctx.fillStyle = '#cfe8ff';
+      ctx.fillText('N', cx - 5, cy - r - 14);
+      ctx.fillText('S', cx - 5, cy + r + 2);
+      ctx.fillText('E', cx + r + 3, cy - 6);
+      ctx.fillText('W', cx - r - 13, cy - 6);
+      var rad = (cp.heading) * Math.PI / 180;
+      var ex = cx + Math.sin(rad) * (r - 8), ey = cy - Math.cos(rad) * (r - 8);
+      ctx.strokeStyle = '#ff6b7a'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.fillStyle = '#ff6b7a'; ctx.beginPath(); ctx.arc(ex, ey, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#8fd0ff'; ctx.font = 'bold 14px ui-monospace,monospace';
+      var hdg = ('   ' + Number(cp.heading).toFixed(1)).slice(-6);
+      ctx.fillText('HDG ' + hdg, 8, 6);
+      ctx.font = '12px ui-monospace,monospace';
+      ctx.fillText((cp.dir || '-') + '  ' + (cp.calibrated ? 'CAL OK' : 'SW1=CAL'), 8, H - 16);
+    } else {
+      // 数据页：MAG / P/R / 状态
+      var m = cp.mag || [];
+      ctx.fillStyle = '#8fd0ff'; ctx.font = '13px ui-monospace,monospace';
+      ctx.fillText('MAG X' + (m[0] != null ? m[0] : '-'), 8, 6);
+      ctx.fillText('    Y' + (m[1] != null ? m[1] : '-'), 8, 24);
+      ctx.fillText('    Z' + (m[2] != null ? m[2] : '-'), 8, 42);
+      ctx.fillStyle = '#ffd479';
+      ctx.fillText('HDG ' + Number(cp.heading).toFixed(1), 128, 6);
+      ctx.fillText('P' + Number(cp.pitch).toFixed(1) + ' R' + Number(cp.roll).toFixed(1), 128, 24);
+      ctx.fillStyle = '#7ee0b0';
+      ctx.fillText('IMU:' + (cp.imu_ok ? 'OK' : '--') + ' MAG:' + (cp.mag_ok ? 'OK' : '--'), 128, 42);
+    }
+  }
+
   ESP.pages.monitor = {
     title: '设备监控',
     sub: '实时状态、心跳与历史记录',
@@ -45,6 +101,35 @@
           box.appendChild(U.el('div.banner.warn', {}, [
             U.el('div', { html: '<b>设备当前离线。</b>系统会持续自动重试连接（WebSocket 指数退避 + HTTP 轮询）。请检查供电、Wi-Fi 信号、IP 是否变化。' })
           ]));
+        }
+
+        // 仿真 OLED 屏 + 实时参数（仅真实设备、拿到状态时显示）
+        if (state && !isSim) {
+          var canvas = U.el('canvas.sim-oled', { width: 256, height: 128 });
+          var screenWrap = U.el('div.oled-frame', {}, [canvas]);
+          var cp = state.compass || {};
+          var liveRows = [
+            ['航向 HDG', cp.heading != null ? Number(cp.heading).toFixed(1) + '° ' + (cp.dir || '') : '-'],
+            ['俯仰 / 横滚', (cp.pitch != null ? Number(cp.pitch).toFixed(1) : '-') + '° / ' + (cp.roll != null ? Number(cp.roll).toFixed(1) : '-') + '°'],
+            ['姿态传感器', (cp.imu_ok ? 'MPU6050 正常' : '未连接') + ' · 磁力计 ' + (cp.mag_ok ? '正常' : '未连接')],
+            ['校准状态', cp.calibrating ? ('校准中 ' + (cp.cal_progress || 0) + '%') : (cp.calibrated ? '已校准' : '未校准')],
+            ['磁场 X/Y/Z', cp.mag ? cp.mag.join(' / ') : '-'],
+            ['加速度 X/Y/Z', cp.accel ? cp.accel.join(' / ') : '-']
+          ];
+          var liveGrid = U.el('div.stat-grid');
+          liveRows.forEach(function (r) { liveGrid.appendChild(ESP.ui.statRow(r[0], r[1])); });
+          box.appendChild(U.el('div.card', {}, [
+            U.el('div.card-head', {}, [U.el('h3', { text: '显示屏实时画面（仿真）' }), U.el('span.hint', { text: 'SSD1306 128×64 · 由设备上传数据还原' })]),
+            U.el('div.oled-layout', {}, [
+              screenWrap,
+              U.el('div', {}, [
+                U.el('div.small.muted', { text: '屏幕显示内容随设备切换，数据每 5 秒刷新' }),
+                liveGrid
+              ])
+            ])
+          ]));
+          // 绘制（DOM 已入树）
+          drawSimOLED(canvas, state);
         }
 
         // KPI
