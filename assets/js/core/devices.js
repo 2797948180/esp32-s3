@@ -48,6 +48,9 @@
           deviceId: record.id, deviceName: record.name, simulated: node.simulated
         });
       },
+      onSeen: function (ts) {
+        node.lastSeen = ts || Date.now();
+      },
       onError: function (e) {
         node.lastError = { ts: Date.now(), message: e.message };
       }
@@ -227,7 +230,9 @@
       var node = runtime[d.id];
       if (!node || !node.started) return;
       // 离线判定：超过阈值没有收到任何来自设备的消息
-      if (node.online && node.lastSeen && now - node.lastSeen > timeout) {
+      // MQTT 走公网 + 心跳 5s，抖动/后台节流更明显，给足 60s 余量，避免误判离线。
+      var deviceTimeout = d.transport === 'mqtt' ? Math.max(timeout, 60000) : timeout;
+      if (node.online && node.lastSeen && now - node.lastSeen > deviceTimeout) {
         node.online = false;
         node.source = 'timeout';
         ESP.bus.emit('device:status', { deviceId: d.id, online: false, source: 'timeout' });
