@@ -4,7 +4,7 @@
   var ESP = global.ESP = global.ESP || {};
   var U = ESP.util;
 
-  var ROUTES = ['dashboard', 'devices', 'gpio', 'pwm', 'monitor', 'serial', 'settings'];
+  var ROUTES = ['dashboard', 'devices', 'gpio', 'pwm', 'monitor', 'serial', 'settings', 'voltage'];
   var pageCtx = null;       // 当前页 { key, cleanups:[] }
 
   function routeFromHash() {
