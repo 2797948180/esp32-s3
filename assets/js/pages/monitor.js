@@ -142,6 +142,50 @@
       function device() { return ESP.store.activeDevice(); }
       function node() { return ESP.devices.activeNode(); }
 
+      function currentRefreshMs() {
+        var ms = Number(ESP.store.settings().monitorRefreshMs || 1000);
+        return ms < 100 ? 100 : ms;
+      }
+
+      // 工具栏只创建一次，避免定时重绘时替换 select 导致无法操作
+      function buildToolbar() {
+        var refreshSel = U.el('select.sel.sm', {});
+        [[100, '0.1 秒'], [500, '0.5 秒'], [1000, '1 秒'], [2000, '2 秒'], [3000, '3 秒'], [5000, '5 秒']].forEach(function (o) {
+          refreshSel.appendChild(U.el('option', { value: String(o[0]), text: o[1] }));
+        });
+        refreshSel.value = String(currentRefreshMs());
+        refreshSel.addEventListener('change', function () {
+          ESP.store.updateSettings({ monitorRefreshMs: Number(refreshSel.value) });
+          ESP.ui.toast('刷新间隔已设为 ' + refreshSel.options[refreshSel.selectedIndex].text, 'ok');
+          ESP.app.render();
+        });
+
+        var themeSel = U.el('select.sel.sm', {});
+        [['default', '默认风格'], ['glass', '苹果玻璃风'], ['light', '白色'], ['dark', '黑色']].forEach(function (o) {
+          themeSel.appendChild(U.el('option', { value: o[0], text: o[1] }));
+        });
+        themeSel.value = ESP.store.settings().theme || 'default';
+        themeSel.addEventListener('change', function () {
+          ESP.store.updateSettings({ theme: themeSel.value });
+          ESP.ui.toast('主题已切换为 ' + themeSel.options[themeSel.selectedIndex].text, 'ok');
+        });
+
+        return U.el('div.card', { style: { marginBottom: '14px' } }, [
+          U.el('div.card-head', {}, [
+            U.el('h3', { text: '监控设置' }),
+            U.el('span.hint', { text: '仅保存在本机浏览器' })
+          ]),
+          U.el('div.row', { style: { gap: '18px' } }, [
+            U.el('div.row', { style: { gap: '8px' } }, [
+              U.el('span.small.muted', { text: '数据刷新间隔' }), refreshSel
+            ]),
+            U.el('div.row', { style: { gap: '8px' } }, [
+              U.el('span.small.muted', { text: '主题风格' }), themeSel
+            ])
+          ])
+        ]);
+      }
+
       function draw() {
         U.clear(box);
         var d = device();
@@ -161,48 +205,6 @@
             U.el('div', { html: '<b>设备当前离线。</b>系统会持续自动重试连接（WebSocket 指数退避 + HTTP 轮询）。请检查供电、Wi-Fi 信号、IP 是否变化。' })
           ]));
         }
-
-        // 监控设置：刷新间隔与主题风格（保存在本机浏览器）
-        var curRefresh = Number(ESP.store.settings().monitorRefreshMs || 1000);
-        if (curRefresh < 100) curRefresh = 100;
-        var curTheme = ESP.store.settings().theme || 'default';
-
-        var refreshSel = U.el('select.sel.sm', {});
-        [[100, '0.1 秒'], [500, '0.5 秒'], [1000, '1 秒'], [2000, '2 秒'], [3000, '3 秒'], [5000, '5 秒']].forEach(function (o) {
-          refreshSel.appendChild(U.el('option', { value: String(o[0]), text: o[1] }));
-        });
-        refreshSel.value = String(curRefresh);
-        refreshSel.addEventListener('change', function () {
-          var ms = Number(refreshSel.value);
-          ESP.store.updateSettings({ monitorRefreshMs: ms });
-          ESP.ui.toast('刷新间隔已设为 ' + refreshSel.options[refreshSel.selectedIndex].text, 'ok');
-          ESP.app.render();
-        });
-
-        var themeSel = U.el('select.sel.sm', {});
-        [['default', '默认风格'], ['glass', '苹果玻璃风'], ['light', '白色'], ['dark', '黑色']].forEach(function (o) {
-          themeSel.appendChild(U.el('option', { value: o[0], text: o[1] }));
-        });
-        themeSel.value = curTheme;
-        themeSel.addEventListener('change', function () {
-          ESP.store.updateSettings({ theme: themeSel.value });
-          ESP.ui.toast('主题已切换为 ' + themeSel.options[themeSel.selectedIndex].text, 'ok');
-        });
-
-        box.appendChild(U.el('div.card', {}, [
-          U.el('div.card-head', {}, [
-            U.el('h3', { text: '监控设置' }),
-            U.el('span.hint', { text: '仅保存在本机浏览器' })
-          ]),
-          U.el('div.row', { style: { gap: '18px' } }, [
-            U.el('div.row', { style: { gap: '8px' } }, [
-              U.el('span.small.muted', { text: '数据刷新间隔' }), refreshSel
-            ]),
-            U.el('div.row', { style: { gap: '8px' } }, [
-              U.el('span.small.muted', { text: '主题风格' }), themeSel
-            ])
-          ])
-        ]));
 
         // 仿真 OLED 屏 + 实时参数（仅真实设备、拿到状态时显示）
         if (state && !isSim) {
@@ -235,7 +237,7 @@
             U.el('div.oled-layout', {}, [
               screenWrap,
               U.el('div', {}, [
-                U.el('div.small.muted', { text: '与实物 OLED 屏幕内容一致，页面每 ' + (curRefresh / 1000) + ' 秒刷新' }),
+                U.el('div.small.muted', { text: '与实物 OLED 屏幕内容一致，页面每 ' + (currentRefreshMs() / 1000) + ' 秒刷新' }),
                 liveGrid
               ])
             ])
@@ -431,12 +433,12 @@
         ]));
       }
 
+      root.appendChild(buildToolbar());
       box = U.el('div');
       root.appendChild(box);
       draw();
 
-      var refreshMs = Number(ESP.store.settings().monitorRefreshMs || 1000);
-      if (refreshMs < 100) refreshMs = 100;
+      var refreshMs = currentRefreshMs();
       ctx.onBus('device:state', U.throttle(draw, refreshMs));
       ctx.onBus('device:status', draw);
       ctx.onBus('active:changed', draw);
