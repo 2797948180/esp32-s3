@@ -51,6 +51,13 @@
     accel_z:      { field: { key: 'value', label: '加速度 Z 阈值', def: 0, min: -2, max: 2, step: 0.01 } }
   };
 
+  var COMPASS_METRIC_KEYS = {
+    heading: 1, pitch: 1, roll: 1,
+    mag_x: 1, mag_y: 1, mag_z: 1,
+    accel_x: 1, accel_y: 1, accel_z: 1
+  };
+  function metricGroup(m) { return (m && COMPASS_METRIC_KEYS[m.key]) ? 'compass' : 'env'; }
+
   function hasEnvData(env) {
     return !!(env && (env.temperature != null || env.humidity != null || env.lux_bh1750 != null ||
                       env.lux_ldr != null || env.fan_level != null || env.pir != null));
@@ -456,6 +463,7 @@
         var state = n && n.state;
         var dev = (state && state.device) || {};
         var isSim = d.transport === 'sim';
+        var latest = latestSource(state);  // 当前监控类别：env / compass / null
 
         if (isSim) {
           box.appendChild(U.el('div.banner.sim', {}, [
@@ -476,10 +484,9 @@
           var cp = state.compass || {};
           var hasEnv = hasEnvData(env);
           var hasCp = hasCompassData(cp);
-          var latest = latestSource(state);
           var f1 = function (v) { return (v == null || v === 'null' || isNaN(v)) ? '-' : Number(v).toFixed(1); };
 
-          // 右侧参数显示全部可用字段，不再二选一
+          // 右侧参数只显示当前监控类别的字段
           var envRows = hasEnv ? [
             ['环境·温度', f1(env.temperature) + ' ℃'],
             ['环境·湿度', f1(env.humidity) + ' %RH'],
@@ -496,24 +503,22 @@
             ['指南针·磁场 X/Y/Z', cp.mag ? cp.mag.join(' / ') : '-'],
             ['指南针·加速度 X/Y/Z', cp.accel ? cp.accel.join(' / ') : '-']
           ] : [];
-          var liveRows = envRows.concat(cpRows);
+          var liveRows = (latest === 'compass') ? cpRows : (latest === 'env' ? envRows : envRows.concat(cpRows));
           if (!liveRows.length) liveRows = [['实时参数', '等待设备上报数据']];
 
           var liveGrid = U.el('div.stat-grid');
           liveRows.forEach(function (r) { liveGrid.appendChild(ESP.ui.statRow(r[0], r[1])); });
 
-          var srcText = [];
-          if (hasEnv) srcText.push('环境');
-          if (hasCp) srcText.push('指南针');
-          var hintText = 'SSD1306 128×64 · ' + (srcText.join(' + ') || '等待数据');
-          if (latest) hintText += ' · 画面显示：' + (latest === 'env' ? '环境（最新更新）' : '指南针（最新更新）');
+          var modeText = latest === 'compass' ? '指南针数据' : (latest === 'env' ? '环境数据' : '等待数据');
+          var hintText = 'SSD1306 128×64 · ' + modeText;
+          if (latest) hintText += '（最新更新）';
 
           box.appendChild(U.el('div.card', {}, [
             U.el('div.card-head', {}, [U.el('h3', { text: '显示屏实时画面' }), U.el('span.hint', { text: hintText })]),
             U.el('div.oled-layout', {}, [
               screenWrap,
               U.el('div', {}, [
-                U.el('div.small.muted', { text: '每 ' + (currentRefreshMs() / 1000) + ' 秒请求最新数据；右侧显示全部可用参数' }),
+                U.el('div.small.muted', { text: '每 ' + (currentRefreshMs() / 1000) + ' 秒请求最新数据；右侧仅显示当前监控类别参数' }),
                 liveGrid
               ])
             ])
@@ -571,6 +576,7 @@
         var metrics = ESP.devMetrics || [];
         var history = n.history || [];
         var activeCharts = metrics.filter(function (m) {
+          if (latest && metricGroup(m) !== latest) return false;  // 只保留当前监控类别
           return history.some(function (h) { return typeof h[m.key] === 'number' && isFinite(h[m.key]); });
         });
         if (activeCharts.length) {
@@ -589,7 +595,7 @@
             ]));
           });
           box.appendChild(U.el('div.card', {}, [
-            U.el('div.card-head', {}, [U.el('h3', { text: '实时变化曲线' }), U.el('span.hint', { text: '自动识别 ' + activeCharts.length + ' 项有数据的指标 · 本地缓存' })]),
+            U.el('div.card-head', {}, [U.el('h3', { text: '实时变化曲线' }), U.el('span.hint', { text: '自动识别 ' + activeCharts.length + ' 项' + (latest ? '（' + (latest === 'env' ? '环境' : '指南针') + '）' : '') + ' · 本地缓存' })]),
             chartGrid
           ]));
         }
