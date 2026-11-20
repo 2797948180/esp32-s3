@@ -84,7 +84,7 @@
      state 里有 env 就画环境监测画面（对齐固件 taskDisplay 三页），
      有 compass 就画指南针罗盘/数据页；两者都没有才提示等待。
      逻辑坐标 128x64，按 canvas 宽度自动缩放。 */
-  function drawSimOLED(canvas, state, prefer) {
+  function drawSimOLED(canvas, state, prefer, displayInfo) {
     if (!canvas) return;
     var ctx = canvas.getContext('2d');
     var S = canvas.width / 128;
@@ -101,13 +101,13 @@
     var hasCp = hasCompassData(cp);
 
     if (prefer === 'compass' && hasCp) {
-      drawCompassPanel(ctx, cp, (state && state.compassInfo) || {});
+      drawCompassPanel(ctx, cp, displayInfo || (state && state.compassInfo) || {});
     } else if (prefer === 'env' && hasEnv) {
       drawEnvPanel(ctx, env);
     } else if (hasEnv) {
       drawEnvPanel(ctx, env);
     } else if (hasCp) {
-      drawCompassPanel(ctx, cp, (state && state.compassInfo) || {});
+      drawCompassPanel(ctx, cp, displayInfo || (state && state.compassInfo) || {});
     } else {
       ctx.fillStyle = '#8fd0ff'; ctx.font = 'bold 12px ui-monospace,monospace';
       ctx.fillText('SSD1306 128x64', 24, 22);
@@ -433,6 +433,33 @@
       // 记录 env/compass 各自最近发生变化的时刻，用于“谁最新更新显示谁”
       var sourceSigs = { env: '', compass: '' };
       var sourceTimes = { env: 0, compass: 0 };
+      var compassInfo = {};        // 由 compass.info 命令读取，状态帧里不包含 display_mode
+      var lastCompassInfoAsk = 0;
+
+      function currentDisplayInfo(state) {
+        var info = {};
+        if (state && state.compassInfo && typeof state.compassInfo === 'object') {
+          Object.keys(state.compassInfo).forEach(function (k) { info[k] = state.compassInfo[k]; });
+        }
+        if (state && state.compass && state.compass.display_mode != null) info.display_mode = state.compass.display_mode;
+        if (state && state.display_mode != null) info.display_mode = state.display_mode;
+        Object.keys(compassInfo).forEach(function (k) { if (info[k] == null) info[k] = compassInfo[k]; });
+        return info;
+      }
+
+      function loadCompassInfo(d) {
+        if (!d || Date.now() - lastCompassInfoAsk < 2000) return;
+        lastCompassInfoAsk = Date.now();
+        ESP.devices.invoke(d.id, 'compass.info', {}).then(function (r) {
+          var parsed = r;
+          if (typeof r === 'string') { try { parsed = JSON.parse(r); } catch (e) { parsed = {}; } }
+          if (parsed && typeof parsed === 'object' && parsed.display_mode != null) {
+            compassInfo = parsed;
+            draw();
+          }
+        }).catch(function () {});
+      }
+
       function latestSource(state) {
         var env = (state && state.env) || null;
         var cp = (state && state.compass) || null;
@@ -464,6 +491,7 @@
         var dev = (state && state.device) || {};
         var isSim = d.transport === 'sim';
         var latest = latestSource(state);  // 当前监控类别：env / compass / null
+        if (state && !isSim && latest === 'compass') loadCompassInfo(d);
 
         if (isSim) {
           box.appendChild(U.el('div.banner.sim', {}, [
@@ -495,7 +523,9 @@
             ['环境·人体感应 PIR', env.pir ? '有人' : '无人'],
             ['环境·风扇', '档 ' + (env.fan_level != null ? env.fan_level : '-') + '（' + (env.fan_auto ? '自动' : '手动') + '）']
           ] : [];
+          var dispInfo = currentDisplayInfo(state);
           var cpRows = hasCp ? [
+            ['指南针·OLED 显示模式', Number(dispInfo.display_mode || 0) === 1 ? '数据页' : '罗盘页'],
             ['指南针·航向 HDG', cp.heading != null ? Number(cp.heading).toFixed(1) + '° ' + (cp.dir || '') : '-'],
             ['指南针·俯仰 / 横滚', (cp.pitch != null ? Number(cp.pitch).toFixed(1) : '-') + '° / ' + (cp.roll != null ? Number(cp.roll).toFixed(1) : '-') + '°'],
             ['指南针·姿态传感器', (cp.imu_ok ? 'MPU6050 正常' : '未连接') + ' · 磁力计 ' + (cp.mag_ok ? '正常' : '未连接')],
@@ -523,7 +553,7 @@
               ])
             ])
           ]));
-          drawSimOLED(canvas, state, latest);
+          drawSimOLED(canvas, state, latest, dispInfo);
         }
 
         // KPI
