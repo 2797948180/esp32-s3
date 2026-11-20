@@ -171,6 +171,7 @@
     sub: '实时状态、心跳与历史记录',
     render: function (root, ctx) {
       var box = null;
+      var box2 = null;
 
       function device() { return ESP.store.activeDevice(); }
       function node() { return ESP.devices.activeNode(); }
@@ -398,6 +399,7 @@
 
       function draw() {
         U.clear(box);
+        U.clear(box2);
         var d = device();
         if (!d) { box.appendChild(ESP.ui.noDevice('添加设备后才能看到监控数据。', '去添加设备', function () { ESP.app.navigate('devices'); })); return; }
         var n = ESP.devices.get(d.id);
@@ -529,13 +531,13 @@
           ]));
         }
 
-        // 自适应阈值：复用同一个节点，刷新时只更新状态，不重建输入框
+        // 自适应阈值：节点独立挂载，刷新时不摘除，输入框不会失焦
         thresholdBox.style.marginTop = activeCharts.length ? '14px' : '0';
-        box.appendChild(thresholdBox);
+        thresholdBox.style.marginBottom = '14px';
         updateThresholdCard(activeCharts, state);
 
         // 设备身份
-        box.appendChild(U.el('div.card', {}, [
+        box2.appendChild(U.el('div.card', {}, [
           U.el('div.card-head', {}, [
             U.el('h3', { text: '设备信息' }),
             U.el('div.right.row', { style: { gap: '6px' } }, [
@@ -575,7 +577,7 @@
         // GPIO / PWM 快照
         var pins = pinList(state);
         if (!pins.length) {
-          box.appendChild(U.el('div.card', {}, [
+          box2.appendChild(U.el('div.card', {}, [
             U.el('div.card-head', {}, [U.el('h3', { text: 'GPIO / PWM 实时快照' })]),
             U.el('div.empty', { text: '尚未读取到引脚数据（设备可能离线或仍是旧固件）。' })
           ]));
@@ -600,14 +602,14 @@
           });
           tbl.appendChild(tb);
           wrap.appendChild(tbl);
-          box.appendChild(U.el('div.card', {}, [
+          box2.appendChild(U.el('div.card', {}, [
             U.el('div.card-head', {}, [U.el('h3', { text: 'GPIO / PWM 实时快照' }), U.el('span.hint', { text: pins.length + ' 个引脚' })]),
             wrap
           ]));
         }
 
         // 事件历史
-        box.appendChild(U.el('div.card', {}, [
+        box2.appendChild(U.el('div.card', {}, [
           U.el('div.card-head', {}, [U.el('h3', { text: '状态变化历史' }), U.el('span.hint', { text: '最多保留 200 条' })]),
           (function () {
             var h = (n && n.stateHistory) || [];
@@ -625,7 +627,7 @@
         ]));
 
         // 操作日志
-        box.appendChild(U.el('div.card', {}, [
+        box2.appendChild(U.el('div.card', {}, [
           U.el('div.card-head', {}, [
             U.el('h3', { text: '操作日志' }),
             U.el('div.right.row', { style: { gap: '6px' } }, [
@@ -650,7 +652,10 @@
 
       root.appendChild(buildToolbar());
       box = U.el('div');
+      box2 = U.el('div');
       root.appendChild(box);
+      root.appendChild(thresholdBox);
+      root.appendChild(box2);
       draw();
 
       var refreshMs = currentRefreshMs();
