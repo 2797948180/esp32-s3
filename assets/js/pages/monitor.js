@@ -476,6 +476,9 @@
         }
         if (state && state.compass && state.compass.display_mode != null) info.display_mode = state.compass.display_mode;
         if (state && state.display_mode != null) info.display_mode = state.display_mode;
+        // CompassCloud 固件用顶层 page 表示 SW2 切换后的 OLED 页面
+        if (state && state.page != null) info.display_mode = Number(state.page);
+        if (state && state.compass && state.compass.page != null) info.display_mode = Number(state.compass.page);
         Object.keys(compassInfo).forEach(function (k) { if (info[k] == null) info[k] = compassInfo[k]; });
         return info;
       }
@@ -483,10 +486,11 @@
       function loadCompassInfo(d) {
         if (!d || Date.now() - lastCompassInfoAsk < 2000) return;
         lastCompassInfoAsk = Date.now();
-        ESP.devices.invoke(d.id, 'compass.info', {}).then(function (r) {
+        ESP.devices.invoke(d.id, 'compass.status', {}).then(function (r) {
           var parsed = r;
           if (typeof r === 'string') { try { parsed = JSON.parse(r); } catch (e) { parsed = {}; } }
-          if (parsed && typeof parsed === 'object' && parsed.display_mode != null) {
+          if (parsed && typeof parsed === 'object' && parsed.page != null) {
+            parsed.display_mode = Number(parsed.page);
             compassInfo = parsed;
             draw();
           }
