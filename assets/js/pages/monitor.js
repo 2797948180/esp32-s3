@@ -165,37 +165,70 @@
     }
   }
 
-  // 指南针画面：保留罗盘页/数据页（逻辑坐标 128x64）
+  function dirNameEn(h) {
+    var names = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+    var v = Number(h) || 0;
+    if (v < 0) v += 360;
+    return names[Math.floor((v + 11.25) / 22.5) & 15];
+  }
+
+  // 与实物固件一致的指南针画面：手机罗盘页 / 数据页（逻辑坐标 128x64）
   function drawCompassPanel(ctx, cp, info) {
-    var mode = info.display_mode != null ? info.display_mode : 0;
+    var mode = Number(info.display_mode || 0);
+    var h = Number(cp.heading) || 0;
+    ctx.fillStyle = '#8fd0ff';
+    ctx.strokeStyle = '#8fd0ff';
+    ctx.lineWidth = 1;
+    ctx.font = '8px ui-monospace,monospace';
+
     if (mode === 0) {
-      var cx = 64, cy = 40, r = 22;
-      ctx.strokeStyle = '#4a7fb5'; ctx.lineWidth = 1;
+      var cx = 34, cy = 36, r = 27;
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = '#cfe8ff'; ctx.font = '8px ui-monospace,monospace';
-      ctx.fillText('N', cx - 3, cy - r - 8);
-      ctx.fillText('S', cx - 3, cy + r + 2);
-      ctx.fillText('E', cx + r + 2, cy - 4);
-      ctx.fillText('W', cx - r - 7, cy - 4);
-      var rad = (Number(cp.heading) || 0) * Math.PI / 180;
-      var ex = cx + Math.sin(rad) * (r - 5), ey = cy - Math.cos(rad) * (r - 5);
-      ctx.strokeStyle = '#ff6b7a'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
-      ctx.fillStyle = '#8fd0ff'; ctx.font = 'bold 9px ui-monospace,monospace';
-      ctx.fillText('HDG ' + Number(cp.heading).toFixed(1), 4, 4);
+      ctx.beginPath(); ctx.arc(cx, cy, r - 5, 0, Math.PI * 2); ctx.stroke();
+
+      // 刻度盘反向旋转：指针固定朝上，方位角相对当前朝向的偏差决定刻度位置
+      for (var a = 0; a < 360; a += 30) {
+        var rad = (a - h - 90) * Math.PI / 180;
+        var main = (a % 90 === 0);
+        var r1 = main ? r - 11 : r - 8;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(rad) * (r - 1), cy + Math.sin(rad) * (r - 1));
+        ctx.lineTo(cx + Math.cos(rad) * r1, cy + Math.sin(rad) * r1);
+        ctx.stroke();
+      }
+
+      var labels = ['N', 'E', 'S', 'W'];
+      for (var i = 0; i < 4; i++) {
+        var lrad = (i * 90 - h - 90) * Math.PI / 180;
+        var lx = cx + Math.cos(lrad) * (r - 10);
+        var ly = cy + Math.sin(lrad) * (r - 10);
+        ctx.fillText(labels[i], lx - 3, ly - 4);
+      }
+
+      // 指针固定朝屏幕上方
+      var tipY = cy - r + 2;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, tipY + 8); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx - 4, tipY + 7); ctx.lineTo(cx, tipY); ctx.lineTo(cx + 4, tipY + 7); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, 2, 0, Math.PI * 2); ctx.fill();
+
+      ctx.fillText('HEADING', 68, 4);
+      ctx.font = 'bold 16px ui-monospace,monospace';
+      ctx.fillText(h.toFixed(1), 68, 16);
       ctx.font = '8px ui-monospace,monospace';
-      ctx.fillText((cp.dir || '-') + '  ' + (cp.calibrated ? 'CAL OK' : 'SW1=CAL'), 4, 58);
+      ctx.fillText('deg', 104, 28);
+      ctx.fillText('DIR:', 68, 42);
+      ctx.fillText(dirNameEn(h), 68, 52);
+      if (cp.calibrating) ctx.fillText(Math.round(Number(cp.cal_progress) || 0) + '%', 96, 52);
+      else if (!cp.calibrated) ctx.fillText('NO CAL', 96, 52);
     } else {
       var m = cp.mag || [];
-      ctx.fillStyle = '#8fd0ff'; ctx.font = '8px ui-monospace,monospace';
-      ctx.fillText('MAG X' + (m[0] != null ? m[0] : '-'), 4, 8);
-      ctx.fillText('    Y' + (m[1] != null ? m[1] : '-'), 4, 24);
-      ctx.fillText('    Z' + (m[2] != null ? m[2] : '-'), 4, 40);
-      ctx.fillStyle = '#ffd479';
-      ctx.fillText('HDG ' + Number(cp.heading).toFixed(1), 70, 8);
-      ctx.fillText('P' + Number(cp.pitch || 0).toFixed(1) + ' R' + Number(cp.roll || 0).toFixed(1), 70, 24);
-      ctx.fillStyle = '#7ee0b0';
-      ctx.fillText('IMU:' + (cp.imu_ok ? 'OK' : '--') + ' MAG:' + (cp.mag_ok ? 'OK' : '--'), 70, 40);
+      ctx.fillText('MAG X:', 0, 0);   ctx.fillText(String(m[0] != null ? m[0] : '-'), 48, 0);
+      ctx.fillText('MAG Y:', 0, 10);  ctx.fillText(String(m[1] != null ? m[1] : '-'), 48, 10);
+      ctx.fillText('MAG Z:', 0, 20);  ctx.fillText(String(m[2] != null ? m[2] : '-'), 48, 20);
+      ctx.fillText('HDG:' + h.toFixed(1), 0, 34);
+      ctx.fillText('MAG:' + (cp.mag_ok ? 'OK' : '--') + ' IMU:' + (cp.imu_ok ? 'OK' : '--'), 0, 44);
+      ctx.fillText('CAL:' + (cp.calibrated ? 'OK' : 'NO'), 0, 54);
     }
   }
 
