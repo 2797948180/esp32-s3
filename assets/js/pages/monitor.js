@@ -51,11 +51,33 @@
     accel_z:      { field: { key: 'value', label: '加速度 Z 阈值', def: 0, min: -2, max: 2, step: 0.01 } }
   };
 
+  function hasEnvData(env) {
+    return !!(env && (env.temperature != null || env.humidity != null || env.lux_bh1750 != null ||
+                      env.lux_ldr != null || env.fan_level != null || env.pir != null));
+  }
+  function hasCompassData(cp) {
+    return !!(cp && (cp.heading != null || cp.pitch != null || cp.roll != null || cp.mag || cp.accel));
+  }
+  function sigPart(v) {
+    if (v == null) return '-';
+    return (typeof v === 'object') ? JSON.stringify(v) : String(v);
+  }
+  function envSignature(env) {
+    if (!env) return '';
+    return [env.temperature, env.humidity, env.lux_bh1750, env.lux_ldr, env.ldr_raw,
+            env.pir, env.fan_level, env.fan_auto, env.page, env.comfort].map(sigPart).join('|');
+  }
+  function compassSignature(cp) {
+    if (!cp) return '';
+    return [cp.heading, cp.pitch, cp.roll, cp.dir, cp.mag, cp.accel,
+            cp.mag_ok, cp.imu_ok, cp.calibrated].map(sigPart).join('|');
+  }
+
   /* 显示屏实时画面（自适应）——实物 OLED 上显示什么就画什么：
      state 里有 env 就画环境监测画面（对齐固件 taskDisplay 三页），
      有 compass 就画指南针罗盘/数据页；两者都没有才提示等待。
      逻辑坐标 128x64，按 canvas 宽度自动缩放。 */
-  function drawSimOLED(canvas, state) {
+  function drawSimOLED(canvas, state, prefer) {
     if (!canvas) return;
     var ctx = canvas.getContext('2d');
     var S = canvas.width / 128;
@@ -68,10 +90,14 @@
 
     var env = (state && state.env) || null;
     var cp = (state && state.compass) || null;
-    var hasEnv = env && (env.temperature != null || env.humidity != null || env.lux_bh1750 != null);
-    var hasCp = cp && (cp.heading != null || cp.mag || cp.accel);
+    var hasEnv = hasEnvData(env);
+    var hasCp = hasCompassData(cp);
 
-    if (hasEnv) {
+    if (prefer === 'compass' && hasCp) {
+      drawCompassPanel(ctx, cp, (state && state.compassInfo) || {});
+    } else if (prefer === 'env' && hasEnv) {
+      drawEnvPanel(ctx, env);
+    } else if (hasEnv) {
       drawEnvPanel(ctx, env);
     } else if (hasCp) {
       drawCompassPanel(ctx, cp, (state && state.compassInfo) || {});
@@ -397,6 +423,30 @@
         });
       }
 
+      // 记录 env/compass 各自最近发生变化的时刻，用于“谁最新更新显示谁”
+      var sourceSigs = { env: '', compass: '' };
+      var sourceTimes = { env: 0, compass: 0 };
+      function latestSource(state) {
+        var env = (state && state.env) || null;
+        var cp = (state && state.compass) || null;
+        var hasEnv = hasEnvData(env);
+        var hasCp = hasCompassData(cp);
+        if (!hasEnv && !hasCp) return null;
+
+        var now = Date.now();
+        if (hasEnv) {
+          var es = envSignature(env);
+          if (es !== sourceSigs.env) { sourceSigs.env = es; sourceTimes.env = now; }
+        }
+        if (hasCp) {
+          var cs = compassSignature(cp);
+          if (cs !== sourceSigs.compass) { sourceSigs.compass = cs; sourceTimes.compass = now; }
+        }
+        if (!hasEnv) return 'compass';
+        if (!hasCp) return 'env';
+        return sourceTimes.compass >= sourceTimes.env ? 'compass' : 'env';
+      }
+
       function draw() {
         U.clear(box);
         U.clear(box2);
@@ -418,44 +468,57 @@
           ]));
         }
 
-        // 仿真 OLED 屏 + 实时参数（仅真实设备、拿到状态时显示）
+        // 显示屏实时画面 + 实时参数（全自适应：env/compass 有啥显示啥）
         if (state && !isSim) {
           var canvas = U.el('canvas.sim-oled', { width: 256, height: 128 });
           var screenWrap = U.el('div.oled-frame', {}, [canvas]);
           var env = state.env || {};
           var cp = state.compass || {};
-          var hasEnv = env.temperature != null || env.humidity != null || env.lux_bh1750 != null;
+          var hasEnv = hasEnvData(env);
+          var hasCp = hasCompassData(cp);
+          var latest = latestSource(state);
           var f1 = function (v) { return (v == null || v === 'null' || isNaN(v)) ? '-' : Number(v).toFixed(1); };
-          // 实时参数跟随实物屏数据：有环境数据显示环境行，有指南针数据显示姿态行
-          var liveRows = hasEnv ? [
-            ['温度', f1(env.temperature) + ' ℃'],
-            ['湿度', f1(env.humidity) + ' %RH'],
-            ['光照 BH1750', f1(env.lux_bh1750) + ' lx'],
-            ['光照 LDR', f1(env.lux_ldr) + ' lx (raw ' + (env.ldr_raw != null ? env.ldr_raw : '-') + ')'],
-            ['人体感应 PIR', env.pir ? '有人' : '无人'],
-            ['风扇', '档 ' + (env.fan_level != null ? env.fan_level : '-') + '（' + (env.fan_auto ? '自动' : '手动') + '）']
-          ] : [
-            ['航向 HDG', cp.heading != null ? Number(cp.heading).toFixed(1) + '° ' + (cp.dir || '') : '-'],
-            ['俯仰 / 横滚', (cp.pitch != null ? Number(cp.pitch).toFixed(1) : '-') + '° / ' + (cp.roll != null ? Number(cp.roll).toFixed(1) : '-') + '°'],
-            ['姿态传感器', (cp.imu_ok ? 'MPU6050 正常' : '未连接') + ' · 磁力计 ' + (cp.mag_ok ? '正常' : '未连接')],
-            ['校准状态', cp.calibrating ? ('校准中 ' + (cp.cal_progress || 0) + '%') : (cp.calibrated ? '已校准' : '未校准')],
-            ['磁场 X/Y/Z', cp.mag ? cp.mag.join(' / ') : '-'],
-            ['加速度 X/Y/Z', cp.accel ? cp.accel.join(' / ') : '-']
-          ];
+
+          // 右侧参数显示全部可用字段，不再二选一
+          var envRows = hasEnv ? [
+            ['环境·温度', f1(env.temperature) + ' ℃'],
+            ['环境·湿度', f1(env.humidity) + ' %RH'],
+            ['环境·光照 BH1750', f1(env.lux_bh1750) + ' lx'],
+            ['环境·光照 LDR', f1(env.lux_ldr) + ' lx (raw ' + (env.ldr_raw != null ? env.ldr_raw : '-') + ')'],
+            ['环境·人体感应 PIR', env.pir ? '有人' : '无人'],
+            ['环境·风扇', '档 ' + (env.fan_level != null ? env.fan_level : '-') + '（' + (env.fan_auto ? '自动' : '手动') + '）']
+          ] : [];
+          var cpRows = hasCp ? [
+            ['指南针·航向 HDG', cp.heading != null ? Number(cp.heading).toFixed(1) + '° ' + (cp.dir || '') : '-'],
+            ['指南针·俯仰 / 横滚', (cp.pitch != null ? Number(cp.pitch).toFixed(1) : '-') + '° / ' + (cp.roll != null ? Number(cp.roll).toFixed(1) : '-') + '°'],
+            ['指南针·姿态传感器', (cp.imu_ok ? 'MPU6050 正常' : '未连接') + ' · 磁力计 ' + (cp.mag_ok ? '正常' : '未连接')],
+            ['指南针·校准状态', cp.calibrating ? ('校准中 ' + (cp.cal_progress || 0) + '%') : (cp.calibrated ? '已校准' : '未校准')],
+            ['指南针·磁场 X/Y/Z', cp.mag ? cp.mag.join(' / ') : '-'],
+            ['指南针·加速度 X/Y/Z', cp.accel ? cp.accel.join(' / ') : '-']
+          ] : [];
+          var liveRows = envRows.concat(cpRows);
+          if (!liveRows.length) liveRows = [['实时参数', '等待设备上报数据']];
+
           var liveGrid = U.el('div.stat-grid');
           liveRows.forEach(function (r) { liveGrid.appendChild(ESP.ui.statRow(r[0], r[1])); });
+
+          var srcText = [];
+          if (hasEnv) srcText.push('环境');
+          if (hasCp) srcText.push('指南针');
+          var hintText = 'SSD1306 128×64 · ' + (srcText.join(' + ') || '等待数据');
+          if (latest) hintText += ' · 画面显示：' + (latest === 'env' ? '环境（最新更新）' : '指南针（最新更新）');
+
           box.appendChild(U.el('div.card', {}, [
-            U.el('div.card-head', {}, [U.el('h3', { text: '显示屏实时画面' }), U.el('span.hint', { text: 'SSD1306 128×64 · ' + (hasEnv ? '环境数据' : (cp.heading != null ? '指南针数据' : '等待数据')) })]),
+            U.el('div.card-head', {}, [U.el('h3', { text: '显示屏实时画面' }), U.el('span.hint', { text: hintText })]),
             U.el('div.oled-layout', {}, [
               screenWrap,
               U.el('div', {}, [
-                U.el('div.small.muted', { text: '与实物 OLED 屏幕内容一致，每 ' + (currentRefreshMs() / 1000) + ' 秒请求最新数据' }),
+                U.el('div.small.muted', { text: '每 ' + (currentRefreshMs() / 1000) + ' 秒请求最新数据；右侧显示全部可用参数' }),
                 liveGrid
               ])
             ])
           ]));
-          // 绘制（DOM 已入树）
-          drawSimOLED(canvas, state);
+          drawSimOLED(canvas, state, latest);
         }
 
         // KPI
