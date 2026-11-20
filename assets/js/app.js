@@ -115,9 +115,19 @@
   }
 
   /* ------------------------------ 初始化 ------------------------------ */
+  function applyTheme() {
+    var s = ESP.store.settings();
+    var theme = s.theme || 'default';
+    document.documentElement.setAttribute('data-theme', theme);
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', theme === 'light' || theme === 'glass' ? '#eef2fa' : '#0b1020');
+  }
+
   function boot() {
     // 来自 transport / devices 的日志统一写入本地存储的日志区
     ESP.bus.on('log', function (e) { ESP.store.pushLog(e); });
+    applyTheme();
+    ESP.bus.on('settings:changed', applyTheme);
 
     U.qsa('.nav-item,.bb-item').forEach(function (n) {
       n.addEventListener('click', function () {

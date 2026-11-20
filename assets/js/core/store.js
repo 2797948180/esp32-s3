@@ -12,6 +12,8 @@
     version: 1,
     settings: {
       pollMs: 1500,
+      monitorRefreshMs: 1000,   // 监控页刷新间隔：100/500/1000/2000/3000/5000 ms
+      theme: 'default',         // 主题：default / glass / light / dark
       offlineTimeoutMs: 6000,
       wsReconnectMs: 3000,
       httpTimeoutMs: 2500,
