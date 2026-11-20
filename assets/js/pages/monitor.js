@@ -177,7 +177,7 @@
           ]),
           U.el('div.row', { style: { gap: '18px' } }, [
             U.el('div.row', { style: { gap: '8px' } }, [
-              U.el('span.small.muted', { text: '数据刷新间隔' }), refreshSel
+              U.el('span.small.muted', { text: '数据刷新间隔（主动请求）' }), refreshSel
             ]),
             U.el('div.row', { style: { gap: '8px' } }, [
               U.el('span.small.muted', { text: '主题风格' }), themeSel
@@ -237,7 +237,7 @@
             U.el('div.oled-layout', {}, [
               screenWrap,
               U.el('div', {}, [
-                U.el('div.small.muted', { text: '与实物 OLED 屏幕内容一致，页面每 ' + (currentRefreshMs() / 1000) + ' 秒刷新' }),
+                U.el('div.small.muted', { text: '与实物 OLED 屏幕内容一致，每 ' + (currentRefreshMs() / 1000) + ' 秒请求最新数据' }),
                 liveGrid
               ])
             ])
@@ -439,10 +439,25 @@
       draw();
 
       var refreshMs = currentRefreshMs();
+      var requesting = false;
+      function requestState() {
+        if (requesting) return;
+        var d = device();
+        var n = d && ESP.devices.get(d.id);
+        if (!n || !n.transport || !n.transport.refresh) return;
+        requesting = true;
+        try {
+          var p = n.transport.refresh();
+          if (p && typeof p.then === 'function') {
+            p.then(function () { requesting = false; }, function () { requesting = false; });
+          } else requesting = false;
+        } catch (e) { requesting = false; }
+      }
       ctx.onBus('device:state', U.throttle(draw, refreshMs));
       ctx.onBus('device:status', draw);
       ctx.onBus('active:changed', draw);
       ctx.onBus('log:added', U.throttle(draw, Math.max(refreshMs, 1200)));
+      ctx.timer(requestState, refreshMs);
       ctx.timer(draw, refreshMs);
     }
   };
