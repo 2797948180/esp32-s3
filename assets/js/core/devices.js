@@ -7,6 +7,36 @@
 
   var HISTORY_LIMIT = 180;   // 约 3 分钟（按 1s 采样）
 
+  function numOf(v) {
+    if (v == null || v === 'null' || v === '') return null;
+    var n = Number(v);
+    return isFinite(n) ? n : null;
+  }
+
+  /* 自适应监控指标表：网页扫描 state，某个指标有数据才缓存/画曲线。
+     get() 返回 null 表示该指标当前无数据（对应传感器/字段不存在）。
+     新增传感器时只需在这里加一行，监控页与曲线页会自动适配。 */
+  var METRICS = [
+    // ---- 环境监测（state.env）----
+    { key: 'temperature', label: '温度', unit: '℃', color: '#ff6b7a', get: function (s) { return numOf(s.env && s.env.temperature); } },
+    { key: 'humidity', label: '湿度', unit: '%RH', color: '#7ee0b0', get: function (s) { return numOf(s.env && s.env.humidity); } },
+    { key: 'lux_bh1750', label: '光照 BH1750', unit: 'lx', color: '#ffd479', get: function (s) { return numOf(s.env && s.env.lux_bh1750); } },
+    { key: 'lux_ldr', label: '光照 LDR', unit: 'lx', color: '#c9a0ff', get: function (s) { return numOf(s.env && s.env.lux_ldr); } },
+    { key: 'fan_level', label: '风扇档位', unit: '档', color: '#53d6c6', get: function (s) { return numOf(s.env && s.env.fan_level); } },
+    { key: 'pir', label: '人体感应', unit: '', color: '#7aa5ff', get: function (s) { if (!s.env || s.env.pir == null) return null; return s.env.pir ? 1 : 0; } },
+    // ---- 电子指南针（state.compass，将来接入自动生效）----
+    { key: 'heading', label: '航向', unit: '°', color: '#7aa5ff', get: function (s) { return numOf(s.compass && s.compass.heading); } },
+    { key: 'pitch', label: '俯仰', unit: '°', color: '#7ee0b0', get: function (s) { return numOf(s.compass && s.compass.pitch); } },
+    { key: 'roll', label: '横滚', unit: '°', color: '#ffd479', get: function (s) { return numOf(s.compass && s.compass.roll); } },
+    { key: 'mag_x', label: '磁场 X', unit: 'µT', color: '#ff6b7a', get: function (s) { var m = s.compass && s.compass.mag; return numOf(m && m[0]); } },
+    { key: 'mag_y', label: '磁场 Y', unit: 'µT', color: '#7ee0b0', get: function (s) { var m = s.compass && s.compass.mag; return numOf(m && m[1]); } },
+    { key: 'mag_z', label: '磁场 Z', unit: 'µT', color: '#7aa5ff', get: function (s) { var m = s.compass && s.compass.mag; return numOf(m && m[2]); } },
+    { key: 'accel_x', label: '加速度 X', unit: 'g', color: '#ff6b7a', get: function (s) { var a = s.compass && s.compass.accel; return numOf(a && a[0]); } },
+    { key: 'accel_y', label: '加速度 Y', unit: 'g', color: '#7ee0b0', get: function (s) { var a = s.compass && s.compass.accel; return numOf(a && a[1]); } },
+    { key: 'accel_z', label: '加速度 Z', unit: 'g', color: '#7aa5ff', get: function (s) { var a = s.compass && s.compass.accel; return numOf(a && a[2]); } }
+  ];
+  ESP.devMetrics = METRICS;   // 供监控页扫描并绘制曲线
+
   var runtime = Object.create(null);   // deviceId -> RuntimeNode
   var tickTimer = null;
 
@@ -72,12 +102,18 @@
     var last = node.history[node.history.length - 1];
     // 采样节流：同一秒内只保留一条
     if (last && Date.now() - last.ts < 1000) return;
-    node.history.push({
+    var point = {
       ts: Date.now(),
       heap_free: d.heap_free,
       rssi: d.rssi,
       online: true
+    };
+    // 自适应：把当前所有有数值的监控指标一并缓存
+    METRICS.forEach(function (m) {
+      var v = m.get(state);
+      if (v != null) point[m.key] = v;
     });
+    node.history.push(point);
     if (node.history.length > HISTORY_LIMIT) node.history.shift();
   }
 

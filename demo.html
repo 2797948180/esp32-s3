@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>效果演示 - ESP32-S3 监控平台</title>
+<link rel="stylesheet" href="assets/css/app.css?v=20261120a">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="logo">S3</div>
+      <div><div class="kicker">DEMO PREVIEW</div><div class="name">监控页效果演示</div></div>
+    </div>
+    <div class="nav-group"><div class="nav-title">总览</div>
+      <div class="nav-item" data-route="monitor"><span class="ico">◍</span>设备监控</div>
+    </div>
+    <div class="sidebar-foot"><div id="sidebarMode" class="row small"><i class="dot on"></i><span class="muted">演示数据</span></div></div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+  <div class="main">
+    <header class="topbar">
+      <div><h1 id="pageTitle">设备监控</h1><div class="sub" id="pageSub">自适应画面 + 变化曲线演示</div></div>
+      <div class="topbar-right">
+        <select class="device-select" id="deviceSelect"></select>
+        <div class="row" style="gap:6px"><i class="dot" id="globalDot"></i><span class="small muted" id="globalStatus">演示在线</span></div>
+      </div>
+    </header>
+    <main class="content" id="view"></main>
+  </div>
+</div>
+<div class="toast-wrap" id="toastWrap"></div>
+<div class="modal-mask" id="modalMask"><div class="modal" id="modalBox"></div></div>
+
+<script src="assets/js/core/util.js?v=20261120a"></script>
+<script src="assets/js/core/store.js?v=20261120a"></script>
+<script src="assets/js/core/pinmap.js?v=20261120a"></script>
+<script src="assets/js/transport/lan.js?v=20261120a"></script>
+<script src="assets/js/transport/mqtt.js?v=20261120a"></script>
+<script src="assets/js/transport/simulator.js?v=20261120a"></script>
+<script src="assets/js/core/devices.js?v=20261120a"></script>
+<script src="assets/js/ui/ui.js?v=20261120a"></script>
+<script src="assets/js/serial.js?v=20261120a"></script>
+<script src="assets/js/pages/dashboard.js?v=20261120a"></script>
+<script src="assets/js/pages/devices.js?v=20261120a"></script>
+<script src="assets/js/pages/gpio.js?v=20261120a"></script>
+<script src="assets/js/pages/pwm.js?v=20261120a"></script>
+<script src="assets/js/pages/monitor.js?v=20261120a"></script>
+<script src="assets/js/pages/serial.js?v=20261120a"></script>
+<script src="assets/js/pages/settings.js?v=20261120a"></script>
+<script src="assets/js/pages/voltage.js?v=20261120a"></script>
+<script src="assets/js/app.js?v=20261120a"></script>
+
+<script>
+/* 演示页错误可视化：把 JS 异常直接显示在页面顶部，便于排查 */
+window.addEventListener('error', function (e) {
+  var box = document.getElementById('demoErr');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'demoErr';
+    box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#b00;color:#fff;font:13px monospace;padding:8px;white-space:pre-wrap';
+    document.body.appendChild(box);
+  }
+  box.textContent = 'DEMO ERROR: ' + e.message + ' @' + (e.filename || '') + ':' + e.lineno;
+});
+/* ===== 演示数据注入：走 store API 创建设备，构造同时带 env 与 compass 的在线设备，持续推送变化数据 ===== */
+(function () {
+  function start() {
+    // 清掉可能残留的旧演示设备，避免选中错的设备
+    ESP.store.devices().slice().forEach(function (old) {
+      if (old.id === 'demo-env' || (old.name || '').indexOf('演示') >= 0 || old.host === 'demo' || old.host === 'demo-host') {
+        ESP.store.removeDevice(old.id);
+      }
+    });
+    // 用公开 API 添加设备，确保内存 state 与 runtime node 同步创建
+    var dev = ESP.store.addDevice({
+      id: 'demo-env', name: '演示：环境监测播报站', transport: 'mqtt', board: 'esp32s3-n16r8',
+      host: 'demo-host', port: 8084, remoteId: 'esp32s3_env_station_001'
+    });
+    ESP.store.setActive(dev.id);
+
+    var api = ESP.devices;
+    var node = api.get('demo-env');
+    if (!node) { setTimeout(start, 200); return; }
+    node.online = true;
+    node.source = '演示';
+    node.lastSeen = Date.now();
+    node.started = false;                 // 让 tick 跳过离线判定
+    node.transport = { refresh: function () {}, stop: function () {} };  // 占位，阻止真实连接
+
+    var t0 = Date.now();
+    function push() {
+      var t = (Date.now() - t0) / 1000;
+      var state = {
+        seq: Math.floor(t * 10),
+        ts: Date.now(),
+        simulated: false,
+        device: {
+          id: 'esp32s3_env_station_001', name: '智能环境监测播报站', chip: 'ESP32-S3',
+          firmware: '2.0.0-env', rssi: -48, heap_free: 98272 - (Math.floor(t) % 20) * 64,
+          heap_size: 327680, uptime_ms: Date.now() - t0, ip: '192.168.1.66',
+          mode: 'STA', ssid: 'DemoWiFi', wifi: { mode: 'STA', rssi: -48, ip: '192.168.1.66' },
+          mqtt: { connected: true, configured: true }
+        },
+        pins: [], pwm: { channels: 8, used: 1 },
+        env: {
+          temperature: 26.5 + Math.sin(t / 5) * 2.2,
+          humidity: 58 + Math.sin(t / 7) * 8,
+          lux_bh1750: 320 + Math.sin(t / 4) * 180,
+          lux_ldr: 290 + Math.sin(t / 4.3) * 150,
+          ldr_raw: 1820 + Math.round(Math.sin(t / 4.3) * 300),
+          pir: (Math.floor(t) % 12) < 4,
+          fan_level: (Math.floor(t / 6) % 3) + 1,
+          fan_auto: true,
+          comfort: Math.floor((Math.sin(t / 9) + 1) * 2),
+          th_lo: 26, th_hi: 30, th_al: 33,
+          page: Math.floor(t / 8) % 3,
+          setting_sel: Math.floor(t / 3) % 4,
+          ldr_calib: 0.35,
+          comfort_text: ['GOOD', 'OKAY', 'FAIR', 'POOR!'][Math.floor((Math.sin(t / 9) + 1) * 2)],
+          net_mode: 'STA',
+          ip: '192.168.1.66'
+        },
+        compass: {
+          heading: (t * 12) % 360, dir: 'NNE', pitch: 3.2 + Math.sin(t / 3) * 4,
+          roll: -1.5 + Math.cos(t / 3.5) * 5,
+          mag: [22 + Math.sin(t / 2) * 6, -8 + Math.cos(t / 2.2) * 5, 41 + Math.sin(t / 2.6) * 4],
+          accel: [0.02 + Math.sin(t) * 0.05, -0.01 + Math.cos(t) * 0.04, 0.98 + Math.sin(t / 2) * 0.02],
+          mag_ok: true, imu_ok: true, calibrated: true, calibrating: false, cal_progress: 100
+        },
+        compassInfo: { display_mode: Math.floor(t / 8) % 2 }
+      };
+      node.state = state;
+      ESP.bus.emit('device:state', { deviceId: 'demo-env', state: state });
+      ESP.bus.emit('device:status', { deviceId: 'demo-env', online: true, source: '演示' });
+    }
+    // 先预填 60 个历史点，避免一开始曲线是空的
+    for (var i = 60; i >= 1; i--) {
+      var tt = i;
+      node.history.push({
+        ts: Date.now() - i * 1000, heap_free: 98000 + Math.sin(tt / 5) * 500, rssi: -48 + Math.round(Math.sin(tt / 6) * 4), online: true,
+        temperature: 26.5 + Math.sin(tt / 5) * 2.2,
+        humidity: 58 + Math.sin(tt / 7) * 8,
+        lux_bh1750: 320 + Math.sin(tt / 4) * 180,
+        lux_ldr: 290 + Math.sin(tt / 4.3) * 150,
+        fan_level: (Math.floor(tt / 6) % 3) + 1,
+        pir: (Math.floor(tt) % 12) < 4 ? 1 : 0,
+        heading: (tt * 12) % 360, pitch: 3.2 + Math.sin(tt / 3) * 4, roll: -1.5 + Math.cos(tt / 3.5) * 5,
+        mag_x: 22 + Math.sin(tt / 2) * 6, mag_y: -8 + Math.cos(tt / 2.2) * 5, mag_z: 41 + Math.sin(tt / 2.6) * 4,
+        accel_x: 0.02 + Math.sin(tt) * 0.05, accel_y: -0.01 + Math.cos(tt) * 0.04, accel_z: 0.98 + Math.sin(tt / 2) * 0.02
+      });
+    }
+    push();
+    // 强制渲染监控页（确保页面已订阅 device:state 后再推数据）
+    location.hash = '#/monitor';
+    ESP.app.render();
+    ESP.bus.emit('device:state', { deviceId: 'demo-env', state: node.state });
+    // 每秒推一次，让数据持续变化
+    setInterval(push, 1000);
+  }
+
+  window.addEventListener('load', function () { setTimeout(start, 200); });
+})();
+</script>
+</body>
+</html>

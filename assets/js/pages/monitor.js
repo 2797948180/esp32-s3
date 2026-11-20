@@ -18,59 +18,118 @@
     return Object.keys(state.pins).map(function (k) { return state.pins[k]; });
   }
 
-  /* 仿真 SSD1306 OLED（128x64，2x 绘制）——用固件上传的 compass 数据还原屏幕画面 */
-  function drawSimOLED(canvas, state, page) {
+  /* 显示屏实时画面（自适应）——实物 OLED 上显示什么就画什么：
+     state 里有 env 就画环境监测画面（对齐固件 taskDisplay 三页），
+     有 compass 就画指南针罗盘/数据页；两者都没有才提示等待。
+     逻辑坐标 128x64，按 canvas 宽度自动缩放。 */
+  function drawSimOLED(canvas, state) {
     if (!canvas) return;
     var ctx = canvas.getContext('2d');
-    var W = canvas.width, H = canvas.height;
-    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
-    var cp = (state && state.compass) || {};
-    var info = (state && state.compassInfo) || {};
-    var mode = (info.display_mode != null) ? info.display_mode : (page || 0);
-    var hasMag = cp.mag_ok !== false && cp.heading != null;
+    var S = canvas.width / 128;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(S, 0, 0, S, 0, 0);
     ctx.fillStyle = '#8fd0ff';
-    ctx.font = 'bold 15px ui-monospace,monospace';
     ctx.textBaseline = 'top';
+    ctx.font = '8px ui-monospace,monospace';
 
-    if (!hasMag) {
-      ctx.fillText('ENV STATION', 12, 14);
-      ctx.font = '12px ui-monospace,monospace';
-      ctx.fillText('SSD1306 128x64 (I2C)', 12, 38);
-      ctx.fillText('no compass data', 12, 56);
-      return;
-    }
-    if (mode === 0) {
-      // 罗盘页：表盘 + 方位 + 指针 + HDG
-      var cx = W / 2, cy = H / 2 + 6, r = 44;
-      ctx.strokeStyle = '#4a7fb5'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
-      ctx.font = 'bold 12px ui-monospace,monospace'; ctx.fillStyle = '#cfe8ff';
-      ctx.fillText('N', cx - 5, cy - r - 14);
-      ctx.fillText('S', cx - 5, cy + r + 2);
-      ctx.fillText('E', cx + r + 3, cy - 6);
-      ctx.fillText('W', cx - r - 13, cy - 6);
-      var rad = (cp.heading) * Math.PI / 180;
-      var ex = cx + Math.sin(rad) * (r - 8), ey = cy - Math.cos(rad) * (r - 8);
-      ctx.strokeStyle = '#ff6b7a'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
-      ctx.fillStyle = '#ff6b7a'; ctx.beginPath(); ctx.arc(ex, ey, 3, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#8fd0ff'; ctx.font = 'bold 14px ui-monospace,monospace';
-      var hdg = ('   ' + Number(cp.heading).toFixed(1)).slice(-6);
-      ctx.fillText('HDG ' + hdg, 8, 6);
-      ctx.font = '12px ui-monospace,monospace';
-      ctx.fillText((cp.dir || '-') + '  ' + (cp.calibrated ? 'CAL OK' : 'SW1=CAL'), 8, H - 16);
+    var env = (state && state.env) || null;
+    var cp = (state && state.compass) || null;
+    var hasEnv = env && (env.temperature != null || env.humidity != null || env.lux_bh1750 != null);
+    var hasCp = cp && (cp.heading != null || cp.mag || cp.accel);
+
+    if (hasEnv) {
+      drawEnvPanel(ctx, env);
+    } else if (hasCp) {
+      drawCompassPanel(ctx, cp, (state && state.compassInfo) || {});
     } else {
-      // 数据页：MAG / P/R / 状态
-      var m = cp.mag || [];
-      ctx.fillStyle = '#8fd0ff'; ctx.font = '13px ui-monospace,monospace';
-      ctx.fillText('MAG X' + (m[0] != null ? m[0] : '-'), 8, 6);
-      ctx.fillText('    Y' + (m[1] != null ? m[1] : '-'), 8, 24);
-      ctx.fillText('    Z' + (m[2] != null ? m[2] : '-'), 8, 42);
-      ctx.fillStyle = '#ffd479';
-      ctx.fillText('HDG ' + Number(cp.heading).toFixed(1), 128, 6);
-      ctx.fillText('P' + Number(cp.pitch).toFixed(1) + ' R' + Number(cp.roll).toFixed(1), 128, 24);
+      ctx.fillStyle = '#8fd0ff'; ctx.font = 'bold 12px ui-monospace,monospace';
+      ctx.fillText('SSD1306 128x64', 24, 22);
+      ctx.font = '9px ui-monospace,monospace';
+      ctx.fillText('waiting for screen data', 18, 40);
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  // 环境画面：与固件 envstation.cpp taskDisplay() 布局一致（状态栏 + 3 页）
+  function drawEnvPanel(ctx, e) {
+    function n1(v, d) { return (v == null || v === 'null' || isNaN(v)) ? null : Number(v).toFixed(d == null ? 1 : d); }
+    var comfort = ['GOOD', 'OKAY', 'FAIR', 'POOR!'][e.comfort] || '';
+    var net = (e.net_mode === 'AP') ? 'AP' : (e.ip && e.ip !== '0.0.0.0' ? 'WiFi' : 'OFF');
+    ctx.fillStyle = '#8fd0ff'; ctx.font = '8px ui-monospace,monospace';
+    ctx.fillText(e.pir ? 'P' : '-', 0, 0);
+    ctx.fillText(net, 14, 0);
+    ctx.fillText('FAN:' + (e.fan_auto ? 'A' : 'M') + (e.fan_level || 0), 52, 0);
+    ctx.fillText(comfort, 96, 0);
+    ctx.fillRect(0, 9, 128, 1);
+
+    var page = e.page == null ? 0 : Number(e.page);
+    var t = n1(e.temperature, 1);
+    if (page === 0) {
+      ctx.fillStyle = '#cfe8ff'; ctx.font = 'bold 24px ui-monospace,monospace';
+      ctx.fillText(t == null ? '--.-' : t, 0, 16);
+      var tw = ctx.measureText(t == null ? '--.-' : t).width;
+      ctx.font = '8px ui-monospace,monospace'; ctx.fillText(' C', tw + 1, 32);
+      var h = n1(e.humidity, 1);
       ctx.fillStyle = '#7ee0b0';
-      ctx.fillText('IMU:' + (cp.imu_ok ? 'OK' : '--') + ' MAG:' + (cp.mag_ok ? 'OK' : '--'), 128, 42);
+      ctx.fillText('RH ' + (h == null ? '--.-' : ('    ' + h).slice(-5)) + '%', 0, 40);
+      ctx.fillStyle = '#8fd0ff'; ctx.strokeRect(0.5, 50.5, 51, 7);
+      ctx.fillRect(1, 51, 50 * Math.max(0, Math.min(100, Number(e.humidity) || 0)) / 100, 6);
+      var lux = Number(e.lux_bh1750) || 0;
+      ctx.fillStyle = '#8fd0ff';
+      ctx.fillText(('    ' + (lux > 0 ? Math.round(lux) : '-')).slice(-5) + 'lx', 70, 40);
+      ctx.strokeRect(70.5, 50.5, 51, 7);
+      var lv = lux < 1 ? 0 : Math.min(100, Math.log(lux) / Math.LN10 * 25);
+      ctx.fillRect(71, 51, 50 * lv / 100, 6);
+    } else if (page === 1) {
+      ctx.fillStyle = '#8fd0ff'; ctx.font = '8px ui-monospace,monospace';
+      ctx.fillText('BH1750 : ' + (n1(e.lux_bh1750) || '  --.-') + ' lx', 0, 14);
+      ctx.fillText('LDR AO : ' + (('      ' + (e.ldr_raw == null ? '-' : e.ldr_raw)).slice(-6)) + ' raw', 0, 22);
+      ctx.fillText('LDR lux: ' + (n1(e.lux_ldr) || '  --.-') + ' lx (k=' + (e.ldr_calib != null ? Number(e.ldr_calib).toFixed(2) : '0.35') + ')', 0, 30);
+      ctx.fillText('PIR    : ' + (e.pir ? 'PERSON' : 'NO ONE'), 0, 38);
+      ctx.fillText('IP     : ' + (e.ip || '-'), 0, 46);
+    } else if (page === 2) {
+      var sel = e.setting_sel == null ? 0 : Number(e.setting_sel);
+      ctx.fillStyle = '#8fd0ff'; ctx.font = '8px ui-monospace,monospace';
+      ctx.fillText((sel === 0 ? '> ' : '  ') + 'Fan LOW  : ' + (n1(e.th_lo) || '-') + ' C', 0, 14);
+      ctx.fillText((sel === 1 ? '> ' : '  ') + 'Fan HIGH : ' + (n1(e.th_hi) || '-') + ' C', 0, 22);
+      ctx.fillText((sel === 2 ? '> ' : '  ') + 'ALARM    : ' + (n1(e.th_al) || '-') + ' C', 0, 30);
+      ctx.fillText((sel === 3 ? '> ' : '  ') + 'Fan MODE : ' + (e.fan_auto ? 'AUTO' : 'MANUAL'), 0, 38);
+      ctx.fillText('SW1:next SW2:+ SW3:-', 0, 54);
+    }
+  }
+
+  // 指南针画面：保留罗盘页/数据页（逻辑坐标 128x64）
+  function drawCompassPanel(ctx, cp, info) {
+    var mode = info.display_mode != null ? info.display_mode : 0;
+    if (mode === 0) {
+      var cx = 64, cy = 40, r = 22;
+      ctx.strokeStyle = '#4a7fb5'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#cfe8ff'; ctx.font = '8px ui-monospace,monospace';
+      ctx.fillText('N', cx - 3, cy - r - 8);
+      ctx.fillText('S', cx - 3, cy + r + 2);
+      ctx.fillText('E', cx + r + 2, cy - 4);
+      ctx.fillText('W', cx - r - 7, cy - 4);
+      var rad = (Number(cp.heading) || 0) * Math.PI / 180;
+      var ex = cx + Math.sin(rad) * (r - 5), ey = cy - Math.cos(rad) * (r - 5);
+      ctx.strokeStyle = '#ff6b7a'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.fillStyle = '#8fd0ff'; ctx.font = 'bold 9px ui-monospace,monospace';
+      ctx.fillText('HDG ' + Number(cp.heading).toFixed(1), 4, 4);
+      ctx.font = '8px ui-monospace,monospace';
+      ctx.fillText((cp.dir || '-') + '  ' + (cp.calibrated ? 'CAL OK' : 'SW1=CAL'), 4, 58);
+    } else {
+      var m = cp.mag || [];
+      ctx.fillStyle = '#8fd0ff'; ctx.font = '8px ui-monospace,monospace';
+      ctx.fillText('MAG X' + (m[0] != null ? m[0] : '-'), 4, 8);
+      ctx.fillText('    Y' + (m[1] != null ? m[1] : '-'), 4, 24);
+      ctx.fillText('    Z' + (m[2] != null ? m[2] : '-'), 4, 40);
+      ctx.fillStyle = '#ffd479';
+      ctx.fillText('HDG ' + Number(cp.heading).toFixed(1), 70, 8);
+      ctx.fillText('P' + Number(cp.pitch || 0).toFixed(1) + ' R' + Number(cp.roll || 0).toFixed(1), 70, 24);
+      ctx.fillStyle = '#7ee0b0';
+      ctx.fillText('IMU:' + (cp.imu_ok ? 'OK' : '--') + ' MAG:' + (cp.mag_ok ? 'OK' : '--'), 70, 40);
     }
   }
 
@@ -107,8 +166,19 @@
         if (state && !isSim) {
           var canvas = U.el('canvas.sim-oled', { width: 256, height: 128 });
           var screenWrap = U.el('div.oled-frame', {}, [canvas]);
+          var env = state.env || {};
           var cp = state.compass || {};
-          var liveRows = [
+          var hasEnv = env.temperature != null || env.humidity != null || env.lux_bh1750 != null;
+          var f1 = function (v) { return (v == null || v === 'null' || isNaN(v)) ? '-' : Number(v).toFixed(1); };
+          // 实时参数跟随实物屏数据：有环境数据显示环境行，有指南针数据显示姿态行
+          var liveRows = hasEnv ? [
+            ['温度', f1(env.temperature) + ' ℃'],
+            ['湿度', f1(env.humidity) + ' %RH'],
+            ['光照 BH1750', f1(env.lux_bh1750) + ' lx'],
+            ['光照 LDR', f1(env.lux_ldr) + ' lx (raw ' + (env.ldr_raw != null ? env.ldr_raw : '-') + ')'],
+            ['人体感应 PIR', env.pir ? '有人' : '无人'],
+            ['风扇', '档 ' + (env.fan_level != null ? env.fan_level : '-') + '（' + (env.fan_auto ? '自动' : '手动') + '）']
+          ] : [
             ['航向 HDG', cp.heading != null ? Number(cp.heading).toFixed(1) + '° ' + (cp.dir || '') : '-'],
             ['俯仰 / 横滚', (cp.pitch != null ? Number(cp.pitch).toFixed(1) : '-') + '° / ' + (cp.roll != null ? Number(cp.roll).toFixed(1) : '-') + '°'],
             ['姿态传感器', (cp.imu_ok ? 'MPU6050 正常' : '未连接') + ' · 磁力计 ' + (cp.mag_ok ? '正常' : '未连接')],
@@ -119,11 +189,11 @@
           var liveGrid = U.el('div.stat-grid');
           liveRows.forEach(function (r) { liveGrid.appendChild(ESP.ui.statRow(r[0], r[1])); });
           box.appendChild(U.el('div.card', {}, [
-            U.el('div.card-head', {}, [U.el('h3', { text: '显示屏实时画面（仿真）' }), U.el('span.hint', { text: 'SSD1306 128×64 · 由设备上传数据还原' })]),
+            U.el('div.card-head', {}, [U.el('h3', { text: '显示屏实时画面' }), U.el('span.hint', { text: 'SSD1306 128×64 · ' + (hasEnv ? '环境数据' : (cp.heading != null ? '指南针数据' : '等待数据')) })]),
             U.el('div.oled-layout', {}, [
               screenWrap,
               U.el('div', {}, [
-                U.el('div.small.muted', { text: '屏幕显示内容随设备切换，数据每 5 秒刷新' }),
+                U.el('div.small.muted', { text: '与实物 OLED 屏幕内容一致，数据每 5 秒刷新' }),
                 liveGrid
               ])
             ])
@@ -177,6 +247,33 @@
             ])
           ])
         ]));
+
+        // 自适应变化曲线：扫描指标表，有数据的指标才画曲线
+        var metrics = ESP.devMetrics || [];
+        var history = n.history || [];
+        var activeCharts = metrics.filter(function (m) {
+          return history.some(function (h) { return typeof h[m.key] === 'number' && isFinite(h[m.key]); });
+        });
+        if (activeCharts.length) {
+          var chartGrid = U.el('div.grid.two');
+          activeCharts.forEach(function (m) {
+            var vals = history.map(function (h) { return h[m.key]; });
+            var valid = vals.filter(function (v) { return typeof v === 'number' && isFinite(v); });
+            var cur = valid.length ? valid[valid.length - 1] : null;
+            var label = m.label + (m.unit ? ' (' + m.unit + ')' : '');
+            chartGrid.appendChild(U.el('div', { style: { marginBottom: '10px' } }, [
+              U.el('div.row', { style: { justifyContent: 'space-between' } }, [
+                U.el('div.small.muted', { text: label }),
+                U.el('div.small', { text: cur != null ? Number(cur).toFixed(1) : '-' })
+              ]),
+              ESP.ui.sparkline(vals, { color: m.color, height: 52 })
+            ]));
+          });
+          box.appendChild(U.el('div.card', {}, [
+            U.el('div.card-head', {}, [U.el('h3', { text: '实时变化曲线' }), U.el('span.hint', { text: '自动识别 ' + activeCharts.length + ' 项有数据的指标 · 本地缓存' })]),
+            chartGrid
+          ]));
+        }
 
         // 设备身份
         box.appendChild(U.el('div.card', {}, [
