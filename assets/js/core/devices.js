@@ -252,6 +252,10 @@
       case 'device.rename': return '重命名设备为 ' + args.name;
       case 'device.reboot': return '重启设备';
       case 'config.wifi': return '配置 Wi-Fi：' + args.ssid;
+      case 'env.thresholds': return '环境阈值 低温' + args.lo + ' / 高温' + args.hi + ' / 报警' + args.alarm;
+      case 'env.fan.level': return '风扇档位设为 ' + args.level;
+      case 'env.fan.auto': return '风扇自动模式 ' + (args.enabled ? '开启' : '关闭');
+      case 'env.speak': return '语音播报';
       case 'state': return '读取完整状态';
       case 'info': return '读取设备信息';
       default: return op + ' ' + JSON.stringify(args);

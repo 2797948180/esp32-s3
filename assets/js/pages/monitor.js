@@ -18,6 +18,39 @@
     return Object.keys(state.pins).map(function (k) { return state.pins[k]; });
   }
 
+  /* 自适应阈值控件表：键与 ESP.devMetrics 对应。
+     有 op/opFor 的指标会下发到设备；其余指标保存在本机，用于页面状态提示。 */
+  var THRESHOLD_CONTROLS = {
+    temperature: {
+      fields: [
+        { key: 'lo', label: '风扇低温 ℃', def: 26, min: -20, max: 80, step: 0.5 },
+        { key: 'hi', label: '风扇高温 ℃', def: 30, min: -20, max: 80, step: 0.5 },
+        { key: 'alarm', label: '报警温度 ℃', def: 33, min: -20, max: 80, step: 0.5 }
+      ],
+      op: 'env.thresholds',
+      args: function (v) { return { lo: Number(v.lo), hi: Number(v.hi), alarm: Number(v.alarm) }; }
+    },
+    humidity:       { field: { key: 'value', label: '湿度上限', def: 70,   min: 0,    max: 100,   step: 1 } },
+    lux_bh1750:     { field: { key: 'value', label: '光照上限', def: 1000, min: 0,    max: 200000, step: 10 } },
+    lux_ldr:        { field: { key: 'value', label: '光照上限', def: 1000, min: 0,    max: 200000, step: 10 } },
+    fan_level: {
+      type: 'select',
+      options: [['auto', '自动模式'], ['0', '0 档 停止'], ['1', '1 档 低速'], ['2', '2 档 中速'], ['3', '3 档 高速']],
+      opFor:  function (v) { return v === 'auto' ? 'env.fan.auto' : 'env.fan.level'; },
+      argsFor: function (v) { return v === 'auto' ? { enabled: true } : { level: Number(v) }; }
+    },
+    pir:          { type: 'select', options: [[0, '无人'], [1, '有人']] },
+    heading:      { field: { key: 'value', label: '航向阈值', def: 180, min: 0,    max: 360,  step: 1 } },
+    pitch:        { field: { key: 'value', label: '俯仰阈值', def: 0,   min: -90,  max: 90,   step: 1 } },
+    roll:         { field: { key: 'value', label: '横滚阈值', def: 0,   min: -90,  max: 90,   step: 1 } },
+    mag_x:        { field: { key: 'value', label: '磁场 X 阈值', def: 0, min: -200, max: 200, step: 1 } },
+    mag_y:        { field: { key: 'value', label: '磁场 Y 阈值', def: 0, min: -200, max: 200, step: 1 } },
+    mag_z:        { field: { key: 'value', label: '磁场 Z 阈值', def: 0, min: -200, max: 200, step: 1 } },
+    accel_x:      { field: { key: 'value', label: '加速度 X 阈值', def: 0, min: -2, max: 2, step: 0.01 } },
+    accel_y:      { field: { key: 'value', label: '加速度 Y 阈值', def: 0, min: -2, max: 2, step: 0.01 } },
+    accel_z:      { field: { key: 'value', label: '加速度 Z 阈值', def: 0, min: -2, max: 2, step: 0.01 } }
+  };
+
   /* 显示屏实时画面（自适应）——实物 OLED 上显示什么就画什么：
      state 里有 env 就画环境监测画面（对齐固件 taskDisplay 三页），
      有 compass 就画指南针罗盘/数据页；两者都没有才提示等待。
@@ -186,6 +219,183 @@
         ]);
       }
 
+      // 自适应阈值区：节点只移动不重建，避免刷新时覆盖正在编辑的输入框
+      var thresholdBox = U.el('div');
+      var thresholdSig = '';
+
+      function thresholdAll() {
+        var s = ESP.store.settings();
+        if (!s.metricThresholds) s.metricThresholds = {};
+        return s.metricThresholds;
+      }
+      function thresholdGet(d, key) {
+        return (thresholdAll()[d.id] || {})[key];
+      }
+      function thresholdSet(d, key, vals) {
+        var all = thresholdAll();
+        if (!all[d.id]) all[d.id] = {};
+        all[d.id][key] = vals;
+        ESP.store.updateSettings({ metricThresholds: all });
+      }
+      function thresholdDefaults(m, cfg, state) {
+        var e = (state && state.env) || {};
+        if (cfg.type === 'select') {
+          if (m.key === 'fan_level') return { value: e.fan_auto ? 'auto' : String(e.fan_level == null ? 0 : e.fan_level) };
+          return { value: String(cfg.options[0][0]) };
+        }
+        if (cfg.fields) {
+          var out = {};
+          var stateKey = { lo: 'th_lo', hi: 'th_hi', alarm: 'th_al' };
+          cfg.fields.forEach(function (f) {
+            var v = e[stateKey[f.key]];
+            out[f.key] = (v == null || isNaN(v)) ? f.def : Number(v);
+          });
+          return out;
+        }
+        return { value: cfg.field.def };
+      }
+      function thresholdValues(m, cfg, d, state) {
+        var saved = thresholdGet(d, m.key);
+        return (saved && typeof saved === 'object') ? saved : thresholdDefaults(m, cfg, state);
+      }
+      function thresholdApply(m, cfg, vals) {
+        var d = device();
+        if (!d) return;
+        thresholdSet(d, m.key, vals);
+        var op = cfg.op || (cfg.opFor ? cfg.opFor(vals.value) : null);
+        if (!op) {
+          ESP.ui.toast(m.label + ' 阈值已保存到本机（固件暂不支持下发）', 'ok');
+          return;
+        }
+        var args = cfg.args ? cfg.args(vals) : (cfg.argsFor ? cfg.argsFor(vals.value) : {});
+        ESP.devices.invoke(d.id, op, args).then(function () {
+          ESP.ui.toast(m.label + ' 已下发成功', 'ok');
+          var n = ESP.devices.get(d.id);
+          if (n && n.transport) n.transport.refresh();
+        }).catch(function (e) {
+          ESP.ui.toast(m.label + ' 下发失败：' + e.message, 'err');
+        });
+      }
+      function buildThresholdCard(metrics, state) {
+        U.clear(thresholdBox);
+        var d = device();
+        if (!d || !metrics.length) return;
+        var grid = U.el('div.threshold-grid');
+        var canPush = metrics.some(function (m) {
+          var c = THRESHOLD_CONTROLS[m.key];
+          return c && (c.op || c.opFor);
+        });
+        metrics.forEach(function (m) {
+          var cfg = THRESHOLD_CONTROLS[m.key] || {
+            field: { key: 'value', label: '阈值上限', def: 1, min: -1000, max: 1000, step: 1 }
+          };
+          var vals = thresholdValues(m, cfg, d, state);
+          var item = U.el('div.threshold-item');
+          item.appendChild(U.el('div.head', {}, [
+            U.el('div.small', { text: m.label + (m.unit ? ' (' + m.unit + ')' : '') }),
+            U.el('span.badge.ghost', { 'data-status': m.key, text: (cfg.op || cfg.opFor) ? '可下发' : '本地' })
+          ]));
+          item.appendChild(U.el('div.row', { style: { gap: '6px', marginTop: '4px' } }, [
+            U.el('span.small.muted', { text: '当前' }),
+            U.el('span.small', { 'data-cur': m.key, text: '-' })
+          ]));
+          var fields = U.el('div.fields');
+
+          if (cfg.type === 'select') {
+            var sel = U.el('select.sel.sm', {});
+            cfg.options.forEach(function (o) {
+              sel.appendChild(U.el('option', { value: String(o[0]), text: o[1] }));
+            });
+            sel.value = String(vals.value);
+            sel.addEventListener('change', function () {
+              vals.value = sel.value;
+              thresholdApply(m, cfg, vals);
+            });
+            fields.appendChild(sel);
+          } else if (cfg.fields) {
+            cfg.fields.forEach(function (f) {
+              var input = U.el('input', {
+                type: 'number', min: f.min, max: f.max, step: f.step, value: vals[f.key], title: f.label,
+                'data-field': f.key
+              });
+              fields.appendChild(U.el('div', {}, [
+                U.el('div.small.muted', { text: f.label }), input
+              ]));
+            });
+            fields.appendChild(U.el('button.btn.sm.primary', {
+              text: '下发阈值',
+              onclick: function () {
+                cfg.fields.forEach(function (f) {
+                  var el = fields.querySelector('[data-field="' + f.key + '"]');
+                  vals[f.key] = Number(el.value);
+                });
+                thresholdApply(m, cfg, vals);
+              }
+            }));
+          } else {
+            var f = cfg.field;
+            var input = U.el('input', {
+              type: 'number', min: f.min, max: f.max, step: f.step, value: vals.value, title: f.label,
+              'data-field': 'value'
+            });
+            fields.appendChild(input);
+            fields.appendChild(U.el('button.btn.sm.primary', {
+              text: '保存',
+              onclick: function () { vals.value = Number(input.value); thresholdApply(m, cfg, vals); }
+            }));
+          }
+
+          item.appendChild(fields);
+          grid.appendChild(item);
+        });
+        thresholdBox.appendChild(U.el('div.card', {}, [
+          U.el('div.card-head', {}, [
+            U.el('h3', { text: '自适应阈值 / 档位设置' }),
+            U.el('span.hint', { text: '已识别 ' + metrics.length + ' 项 · ' + (canPush ? '支持设备下发' : '本地阈值') })
+          ]),
+          grid
+        ]));
+      }
+      function updateThresholdCard(metrics, state) {
+        var d = device();
+        if (!d) return;
+        var sig = d.id + '|' + metrics.map(function (m) { return m.key; }).join(',');
+        if (sig !== thresholdSig) {
+          thresholdSig = sig;
+          buildThresholdCard(metrics, state);
+        }
+        metrics.forEach(function (m) {
+          var curEl = thresholdBox.querySelector('[data-cur="' + m.key + '"]');
+          var stEl = thresholdBox.querySelector('[data-status="' + m.key + '"]');
+          if (!curEl) return;
+          var n = ESP.devices.get(d.id);
+          var value = (n && n.state) ? m.get(n.state) : null;
+          curEl.textContent = value == null ? '-' : Number(value).toFixed(1) + (m.unit || '');
+          if (!stEl) return;
+          var cfg = THRESHOLD_CONTROLS[m.key] || {};
+          var vals = thresholdValues(m, cfg, d, state);
+          var cls = 'ghost', txt = '无数据';
+          if (value != null) {
+            if (m.key === 'fan_level') {
+              cls = 'blue'; txt = '档位 ' + Math.round(value);
+            } else if (m.key === 'pir') {
+              cls = Number(value) >= 1 ? 'amber' : 'green';
+              txt = Number(value) >= 1 ? '有人' : '无人';
+            } else if (cfg.fields) {
+              var t = Number(value);
+              if (t >= Number(vals.alarm)) { cls = 'red'; txt = '报警'; }
+              else if (t >= Number(vals.hi)) { cls = 'amber'; txt = '偏高'; }
+              else { cls = 'green'; txt = '正常'; }
+            } else {
+              cls = Number(value) >= Number(vals.value) ? 'red' : 'green';
+              txt = cls === 'red' ? '超限' : '正常';
+            }
+          }
+          stEl.className = 'badge ' + cls;
+          stEl.textContent = txt;
+        });
+      }
+
       function draw() {
         U.clear(box);
         var d = device();
@@ -318,6 +528,11 @@
             chartGrid
           ]));
         }
+
+        // 自适应阈值：复用同一个节点，刷新时只更新状态，不重建输入框
+        thresholdBox.style.marginTop = activeCharts.length ? '14px' : '0';
+        box.appendChild(thresholdBox);
+        updateThresholdCard(activeCharts, state);
 
         // 设备身份
         box.appendChild(U.el('div.card', {}, [

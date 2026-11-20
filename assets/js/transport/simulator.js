@@ -114,7 +114,8 @@
   SimTransport.prototype.exec = function (op, args) {
     var self = this;
     var p = this.pins[args.gpio];
-    if (!p && !(op === 'gpio.batch' || op === 'device.rename' || op === 'device.reboot' || op === 'info')) {
+    var envOps = (op.indexOf('env.') === 0);
+    if (!p && !envOps && !(op === 'gpio.batch' || op === 'device.rename' || op === 'device.reboot' || op === 'info')) {
       throw new Error('模拟固件：引脚 GPIO' + args.gpio + ' 不存在');
     }
     switch (op) {
@@ -140,6 +141,14 @@
         return { rebooting: true };
       case 'info':
         return this.buildState().device;
+      case 'env.thresholds':
+        return { lo: args.lo, hi: args.hi, alarm: args.alarm };
+      case 'env.fan.level':
+        return { fan_level: args.level };
+      case 'env.fan.auto':
+        return { fan_auto: !!args.enabled };
+      case 'env.speak':
+        return { speaking: false };
       default:
         throw new Error('模拟固件暂不支持的操作：' + op);
     }
