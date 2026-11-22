@@ -219,9 +219,12 @@
 
       ctx.fillText('HEADING', 68, 4);
       ctx.font = 'bold 16px ui-monospace,monospace';
-      ctx.fillText(String(h), 68, 16);
+      var hs = String(h);
+      ctx.fillText(hs, 68, 16);
+      var hw = ctx.measureText(hs).width;
+      ctx.font = '10px ui-monospace,monospace';
+      ctx.fillText('°', 68 + hw + 1, 12);
       ctx.font = '8px ui-monospace,monospace';
-      ctx.fillText('deg', 104, 28);
       ctx.fillText('DIR:', 68, 42);
       ctx.fillText(dirNameEn(h), 68, 52);
       if (cp.calibrating) ctx.fillText(Math.round(Number(cp.cal_progress) || 0) + '%', 96, 52);
@@ -231,7 +234,7 @@
       ctx.fillText('MAG X:', 0, 0);   ctx.fillText(String(m[0] != null ? m[0] : '-'), 48, 0);
       ctx.fillText('MAG Y:', 0, 10);  ctx.fillText(String(m[1] != null ? m[1] : '-'), 48, 10);
       ctx.fillText('MAG Z:', 0, 20);  ctx.fillText(String(m[2] != null ? m[2] : '-'), 48, 20);
-      ctx.fillText('HDG:' + h, 0, 34);
+      ctx.fillText('HDG:' + h + '°', 0, 34);
       ctx.fillText('MAG:' + (cp.mag_ok ? 'OK' : '--') + ' IMU:' + (cp.imu_ok ? 'OK' : '--'), 0, 44);
       ctx.fillText('CAL:' + (cp.calibrated ? 'OK' : 'NO'), 0, 54);
     }
@@ -303,66 +306,6 @@
           ESP.ui.toast('主题已切换为 ' + themeSel.options[themeSel.selectedIndex].text, 'ok');
         });
 
-        var d = device();
-        var n = d ? ESP.devices.get(d.id) : null;
-        var reportedOffset = (n && n.state && n.state.compass && n.state.compass.offset != null)
-          ? Number(n.state.compass.offset) : localHeadingOffset(d);
-        headingOffsetValue = reportedOffset;
-        var offsetInput = U.el('input', {
-          type: 'number', step: '0.1', value: headingOffsetValue,
-          style: { width: '84px' }, 'data-heading-offset': '1', title: '指南针磁偏角/角度补偿',
-          oninput: function () {
-            headingOffsetValue = Number(this.value);
-            headingOffsetDirtyUntil = Date.now() + 5000;
-          }
-        });
-        var offsetBtn = U.el('button.btn.sm.primary', {
-          text: '应用',
-          onclick: function () {
-            var v = Number(offsetInput.value);
-            if (!isFinite(v)) { ESP.ui.toast('请输入有效角度', 'err'); return; }
-            if (!d) { ESP.ui.toast('请先选择设备', 'err'); return; }
-            headingOffsetValue = v;
-            headingOffsetDirtyUntil = Date.now() + 5000;
-            setLocalHeadingOffset(d, v);
-            ESP.devices.invoke(d.id, 'compass.set_offset', { degrees: v }).then(function () {
-              ESP.ui.toast('航向补偿已设为 ' + v + '°', 'ok');
-              if (n && n.transport) n.transport.refresh();
-            }).catch(function (e) {
-              ESP.ui.toast('下发失败：' + e.message, 'err');
-            });
-          }
-        });
-
-        var reportedMagNorth = (n && n.state && n.state.compass && n.state.compass.mag_north_offset != null)
-          ? Number(n.state.compass.mag_north_offset) : localMagNorthOffset(d);
-        magNorthOffsetValue = reportedMagNorth;
-        var magNorthInput = U.el('input', {
-          type: 'number', step: '0.1', value: magNorthOffsetValue,
-          style: { width: '84px' }, 'data-mag-north-offset': '1', title: '磁北校正（MAG_NORTH_OFFSET）',
-          oninput: function () {
-            magNorthOffsetValue = Number(this.value);
-            magNorthOffsetDirtyUntil = Date.now() + 5000;
-          }
-        });
-        var magNorthBtn = U.el('button.btn.sm.primary', {
-          text: '应用',
-          onclick: function () {
-            var v = Number(magNorthInput.value);
-            if (!isFinite(v)) { ESP.ui.toast('请输入有效角度', 'err'); return; }
-            if (!d) { ESP.ui.toast('请先选择设备', 'err'); return; }
-            magNorthOffsetValue = v;
-            magNorthOffsetDirtyUntil = Date.now() + 5000;
-            setLocalMagNorthOffset(d, v);
-            ESP.devices.invoke(d.id, 'compass.set_mag_north_offset', { degrees: v }).then(function () {
-              ESP.ui.toast('磁北校正已设为 ' + v + '°', 'ok');
-              if (n && n.transport) n.transport.refresh();
-            }).catch(function (e) {
-              ESP.ui.toast('下发失败：' + e.message, 'err');
-            });
-          }
-        });
-
         return U.el('div.card', { style: { marginBottom: '14px' } }, [
           U.el('div.card-head', {}, [
             U.el('h3', { text: '监控设置' }),
@@ -374,12 +317,6 @@
             ]),
             U.el('div.row', { style: { gap: '8px' } }, [
               U.el('span.small.muted', { text: '主题风格' }), themeSel
-            ]),
-            U.el('div.row', { style: { gap: '8px' } }, [
-              U.el('span.small.muted', { text: '磁偏角/角度补偿 °（指南针）' }), offsetInput, offsetBtn
-            ]),
-            U.el('div.row', { style: { gap: '8px' } }, [
-              U.el('span.small.muted', { text: '磁北校正 °（MAG_NORTH_OFFSET）' }), magNorthInput, magNorthBtn
             ])
           ])
         ]);
@@ -442,6 +379,74 @@
           ESP.ui.toast(m.label + ' 下发失败：' + e.message, 'err');
         });
       }
+      function buildCompassCorrectionSection(d, state) {
+        if (!d) return null;
+        var n = ESP.devices.get(d.id);
+        var reportedOffset = (n && n.state && n.state.compass && n.state.compass.offset != null)
+          ? Number(n.state.compass.offset) : localHeadingOffset(d);
+        headingOffsetValue = reportedOffset;
+        var reportedMagNorth = (n && n.state && n.state.compass && n.state.compass.mag_north_offset != null)
+          ? Number(n.state.compass.mag_north_offset) : localMagNorthOffset(d);
+        magNorthOffsetValue = reportedMagNorth;
+
+        var offsetInput = U.el('input', {
+          type: 'number', step: '0.1', value: headingOffsetValue,
+          style: { width: '84px' }, 'data-heading-offset': '1', title: '磁偏角/角度补偿',
+          oninput: function () {
+            headingOffsetValue = Number(this.value);
+            headingOffsetDirtyUntil = Date.now() + 5000;
+          }
+        });
+        var magNorthInput = U.el('input', {
+          type: 'number', step: '0.1', value: magNorthOffsetValue,
+          style: { width: '84px' }, 'data-mag-north-offset': '1', title: '磁北校正（MAG_NORTH_OFFSET）',
+          oninput: function () {
+            magNorthOffsetValue = Number(this.value);
+            magNorthOffsetDirtyUntil = Date.now() + 5000;
+          }
+        });
+
+        function applyOffset(op, v, msg, save) {
+          if (!isFinite(v)) { ESP.ui.toast('请输入有效角度', 'err'); return; }
+          save(d, v);
+          var node = ESP.devices.get(d.id);
+          ESP.devices.invoke(d.id, op, { degrees: v }).then(function () {
+            ESP.ui.toast(msg + v + '°', 'ok');
+            if (node && node.transport) node.transport.refresh();
+          }).catch(function (e) {
+            ESP.ui.toast('下发失败：' + e.message, 'err');
+          });
+        }
+
+        return U.el('div', { style: { marginTop: '12px', borderTop: '1px solid var(--border)', paddingTop: '10px' } }, [
+          U.el('div.small.muted', { text: '指南针校正（下发到设备并保存）' }),
+          U.el('div.row', { style: { gap: '8px', marginTop: '6px', flexWrap: 'wrap' } }, [
+            U.el('span.small.muted', { text: '磁偏角/角度补偿 °（指南针）' }), offsetInput,
+            U.el('button.btn.sm.primary', {
+              text: '应用',
+              onclick: function () {
+                var v = Number(offsetInput.value);
+                headingOffsetValue = v;
+                headingOffsetDirtyUntil = Date.now() + 5000;
+                applyOffset('compass.set_offset', v, '航向补偿已设为 ', setLocalHeadingOffset);
+              }
+            })
+          ]),
+          U.el('div.row', { style: { gap: '8px', marginTop: '6px', flexWrap: 'wrap' } }, [
+            U.el('span.small.muted', { text: '磁北校正 °（MAG_NORTH_OFFSET）' }), magNorthInput,
+            U.el('button.btn.sm.primary', {
+              text: '应用',
+              onclick: function () {
+                var v = Number(magNorthInput.value);
+                magNorthOffsetValue = v;
+                magNorthOffsetDirtyUntil = Date.now() + 5000;
+                applyOffset('compass.set_mag_north_offset', v, '磁北校正已设为 ', setLocalMagNorthOffset);
+              }
+            })
+          ])
+        ]);
+      }
+
       function buildThresholdCard(metrics, state) {
         U.clear(thresholdBox);
         var d = device();
@@ -514,13 +519,16 @@
           item.appendChild(fields);
           grid.appendChild(item);
         });
-        thresholdBox.appendChild(U.el('div.card', {}, [
+        var compassSection = buildCompassCorrectionSection(d, state);
+        var cardChildren = [
           U.el('div.card-head', {}, [
             U.el('h3', { text: '自适应阈值 / 档位设置' }),
             U.el('span.hint', { text: '已识别 ' + metrics.length + ' 项 · ' + (canPush ? '支持设备下发' : '本地阈值') })
           ]),
           grid
-        ]));
+        ];
+        if (compassSection) cardChildren.push(compassSection);
+        thresholdBox.appendChild(U.el('div.card', {}, cardChildren));
       }
       function updateThresholdCard(metrics, state) {
         var d = device();
