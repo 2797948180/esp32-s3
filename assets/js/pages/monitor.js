@@ -258,6 +258,10 @@
         ESP.store.updateSettings({ headingCompensations: all });
       }
 
+      // 输入框值单独缓存：刷新时不要用设备旧值覆盖用户正在修改的内容
+      var headingOffsetValue = -45;
+      var headingOffsetDirtyUntil = 0;
+
       // 工具栏只创建一次，避免定时重绘时替换 select 导致无法操作
       function buildToolbar() {
         var refreshSel = U.el('select.sel.sm', {});
@@ -285,9 +289,14 @@
         var n = d ? ESP.devices.get(d.id) : null;
         var reportedOffset = (n && n.state && n.state.compass && n.state.compass.offset != null)
           ? Number(n.state.compass.offset) : localHeadingOffset(d);
+        headingOffsetValue = reportedOffset;
         var offsetInput = U.el('input', {
-          type: 'number', step: '0.1', value: reportedOffset,
-          style: { width: '84px' }, 'data-heading-offset': '1', title: '指南针磁偏角/角度补偿'
+          type: 'number', step: '0.1', value: headingOffsetValue,
+          style: { width: '84px' }, 'data-heading-offset': '1', title: '指南针磁偏角/角度补偿',
+          oninput: function () {
+            headingOffsetValue = Number(this.value);
+            headingOffsetDirtyUntil = Date.now() + 5000;
+          }
         });
         var offsetBtn = U.el('button.btn.sm.primary', {
           text: '应用',
@@ -295,6 +304,8 @@
             var v = Number(offsetInput.value);
             if (!isFinite(v)) { ESP.ui.toast('请输入有效角度', 'err'); return; }
             if (!d) { ESP.ui.toast('请先选择设备', 'err'); return; }
+            headingOffsetValue = v;
+            headingOffsetDirtyUntil = Date.now() + 5000;
             setLocalHeadingOffset(d, v);
             ESP.devices.invoke(d.id, 'compass.set_offset', { degrees: v }).then(function () {
               ESP.ui.toast('航向补偿已设为 ' + v + '°', 'ok');
@@ -568,8 +579,11 @@
         var latest = latestSource(state);  // 当前监控类别：env / compass / null
         if (state && !isSim && latest === 'compass') loadCompassInfo(d);
         var offsetEl = document.querySelector('[data-heading-offset]');
-        if (offsetEl && document.activeElement !== offsetEl && state && state.compass && state.compass.offset != null) {
-          offsetEl.value = Number(state.compass.offset);
+        if (offsetEl && document.activeElement !== offsetEl && Date.now() > headingOffsetDirtyUntil &&
+            state && state.compass && state.compass.offset != null) {
+          var reported = Number(state.compass.offset);
+          offsetEl.value = reported;
+          headingOffsetValue = reported;
         }
 
         if (isSim) {
