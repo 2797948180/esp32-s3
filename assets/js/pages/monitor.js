@@ -65,6 +65,11 @@
   function hasCompassData(cp) {
     return !!(cp && (cp.heading != null || cp.pitch != null || cp.roll != null || cp.mag || cp.accel));
   }
+  function displayHeading(cp) {
+    if (!cp) return 0;
+    if (cp.heading_int != null) return Math.round(Number(cp.heading_int));
+    return Math.round(Number(cp.heading) || 0);
+  }
   function sigPart(v) {
     if (v == null) return '-';
     return (typeof v === 'object') ? JSON.stringify(v) : String(v);
@@ -76,7 +81,7 @@
   }
   function compassSignature(cp) {
     if (!cp) return '';
-    return [cp.heading, cp.pitch, cp.roll, cp.dir, cp.mag, cp.accel,
+    return [cp.heading_int, cp.heading, cp.pitch, cp.roll, cp.dir, cp.mag, cp.accel,
             cp.mag_ok, cp.imu_ok, cp.calibrated].map(sigPart).join('|');
   }
 
@@ -176,7 +181,7 @@
   // 与实物固件一致的指南针画面：手机罗盘页 / 数据页（逻辑坐标 128x64）
   function drawCompassPanel(ctx, cp, info) {
     var mode = Number(info.display_mode || 0);
-    var h = Number(cp.heading) || 0;
+    var h = displayHeading(cp);
     ctx.fillStyle = '#8fd0ff';
     ctx.strokeStyle = '#8fd0ff';
     ctx.lineWidth = 1;
@@ -214,7 +219,7 @@
 
       ctx.fillText('HEADING', 68, 4);
       ctx.font = 'bold 16px ui-monospace,monospace';
-      ctx.fillText(h.toFixed(1), 68, 16);
+      ctx.fillText(String(h), 68, 16);
       ctx.font = '8px ui-monospace,monospace';
       ctx.fillText('deg', 104, 28);
       ctx.fillText('DIR:', 68, 42);
@@ -226,7 +231,7 @@
       ctx.fillText('MAG X:', 0, 0);   ctx.fillText(String(m[0] != null ? m[0] : '-'), 48, 0);
       ctx.fillText('MAG Y:', 0, 10);  ctx.fillText(String(m[1] != null ? m[1] : '-'), 48, 10);
       ctx.fillText('MAG Z:', 0, 20);  ctx.fillText(String(m[2] != null ? m[2] : '-'), 48, 20);
-      ctx.fillText('HDG:' + h.toFixed(1), 0, 34);
+      ctx.fillText('HDG:' + h, 0, 34);
       ctx.fillText('MAG:' + (cp.mag_ok ? 'OK' : '--') + ' IMU:' + (cp.imu_ok ? 'OK' : '--'), 0, 44);
       ctx.fillText('CAL:' + (cp.calibrated ? 'OK' : 'NO'), 0, 54);
     }
@@ -671,7 +676,7 @@
           var dispInfo = currentDisplayInfo(state);
           var cpRows = hasCp ? [
             ['指南针·OLED 显示模式', Number(dispInfo.display_mode || 0) === 1 ? '数据页' : '罗盘页'],
-            ['指南针·航向 HDG', cp.heading != null ? Number(cp.heading).toFixed(1) + '° ' + (cp.dir || '') : '-'],
+            ['指南针·航向 HDG', cp.heading != null ? displayHeading(cp) + '° ' + (cp.dir || '') : '-'],
             ['指南针·俯仰 / 横滚', (cp.pitch != null ? Number(cp.pitch).toFixed(1) : '-') + '° / ' + (cp.roll != null ? Number(cp.roll).toFixed(1) : '-') + '°'],
             ['指南针·姿态传感器', (cp.imu_ok ? 'MPU6050 正常' : '未连接') + ' · 磁力计 ' + (cp.mag_ok ? '正常' : '未连接')],
             ['指南针·校准状态', cp.calibrating ? ('校准中 ' + (cp.cal_progress || 0) + '%') : (cp.calibrated ? '已校准' : '未校准')],
