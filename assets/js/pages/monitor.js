@@ -246,6 +246,17 @@
         var ms = Number(ESP.store.settings().monitorRefreshMs || 1000);
         return ms < 100 ? 100 : ms;
       }
+      function localHeadingOffset(d) {
+        var all = ESP.store.settings().headingCompensations || {};
+        return (d && all[d.id] != null) ? Number(all[d.id]) : -45;
+      }
+      function setLocalHeadingOffset(d, v) {
+        var s = ESP.store.settings();
+        var all = s.headingCompensations || {};
+        if (!d) return;
+        all[d.id] = Number(v);
+        ESP.store.updateSettings({ headingCompensations: all });
+      }
 
       // 工具栏只创建一次，避免定时重绘时替换 select 导致无法操作
       function buildToolbar() {
@@ -270,6 +281,30 @@
           ESP.ui.toast('主题已切换为 ' + themeSel.options[themeSel.selectedIndex].text, 'ok');
         });
 
+        var d = device();
+        var n = d ? ESP.devices.get(d.id) : null;
+        var reportedOffset = (n && n.state && n.state.compass && n.state.compass.offset != null)
+          ? Number(n.state.compass.offset) : localHeadingOffset(d);
+        var offsetInput = U.el('input', {
+          type: 'number', step: '0.1', value: reportedOffset,
+          style: { width: '84px' }, 'data-heading-offset': '1', title: '指南针磁偏角/角度补偿'
+        });
+        var offsetBtn = U.el('button.btn.sm.primary', {
+          text: '应用',
+          onclick: function () {
+            var v = Number(offsetInput.value);
+            if (!isFinite(v)) { ESP.ui.toast('请输入有效角度', 'err'); return; }
+            if (!d) { ESP.ui.toast('请先选择设备', 'err'); return; }
+            setLocalHeadingOffset(d, v);
+            ESP.devices.invoke(d.id, 'compass.set_offset', { degrees: v }).then(function () {
+              ESP.ui.toast('航向补偿已设为 ' + v + '°', 'ok');
+              if (n && n.transport) n.transport.refresh();
+            }).catch(function (e) {
+              ESP.ui.toast('下发失败：' + e.message, 'err');
+            });
+          }
+        });
+
         return U.el('div.card', { style: { marginBottom: '14px' } }, [
           U.el('div.card-head', {}, [
             U.el('h3', { text: '监控设置' }),
@@ -281,6 +316,9 @@
             ]),
             U.el('div.row', { style: { gap: '8px' } }, [
               U.el('span.small.muted', { text: '主题风格' }), themeSel
+            ]),
+            U.el('div.row', { style: { gap: '8px' } }, [
+              U.el('span.small.muted', { text: '磁偏角/角度补偿 °（指南针）' }), offsetInput, offsetBtn
             ])
           ])
         ]);
@@ -529,6 +567,10 @@
         var isSim = d.transport === 'sim';
         var latest = latestSource(state);  // 当前监控类别：env / compass / null
         if (state && !isSim && latest === 'compass') loadCompassInfo(d);
+        var offsetEl = document.querySelector('[data-heading-offset]');
+        if (offsetEl && document.activeElement !== offsetEl && state && state.compass && state.compass.offset != null) {
+          offsetEl.value = Number(state.compass.offset);
+        }
 
         if (isSim) {
           box.appendChild(U.el('div.banner.sim', {}, [

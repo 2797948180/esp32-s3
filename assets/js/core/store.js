@@ -15,6 +15,7 @@
       monitorRefreshMs: 1000,   // 监控页刷新间隔：100/500/1000/2000/3000/5000 ms
       theme: 'default',         // 主题：default / glass / light / dark
       metricThresholds: {},     // 自适应阈值：{ deviceId: { metricKey: 值 } }
+      headingCompensations: {}, // 指南针角度补偿：{ deviceId: 度数 }
       offlineTimeoutMs: 6000,
       wsReconnectMs: 3000,
       httpTimeoutMs: 2500,
