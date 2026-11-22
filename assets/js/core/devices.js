@@ -257,6 +257,7 @@
       case 'env.fan.auto': return '风扇自动模式 ' + (args.enabled ? '开启' : '关闭');
       case 'env.speak': return '语音播报';
       case 'compass.set_offset': return '航向补偿设为 ' + (args.degrees != null ? args.degrees : args.offset) + '°';
+      case 'compass.set_mag_north_offset': return '磁北校正设为 ' + (args.degrees != null ? args.degrees : args.offset) + '°';
       case 'state': return '读取完整状态';
       case 'info': return '读取设备信息';
       default: return op + ' ' + JSON.stringify(args);

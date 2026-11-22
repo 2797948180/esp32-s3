@@ -257,10 +257,23 @@
         all[d.id] = Number(v);
         ESP.store.updateSettings({ headingCompensations: all });
       }
+      function localMagNorthOffset(d) {
+        var all = ESP.store.settings().magNorthOffsets || {};
+        return (d && all[d.id] != null) ? Number(all[d.id]) : -92;
+      }
+      function setLocalMagNorthOffset(d, v) {
+        var s = ESP.store.settings();
+        var all = s.magNorthOffsets || {};
+        if (!d) return;
+        all[d.id] = Number(v);
+        ESP.store.updateSettings({ magNorthOffsets: all });
+      }
 
       // 输入框值单独缓存：刷新时不要用设备旧值覆盖用户正在修改的内容
       var headingOffsetValue = -45;
       var headingOffsetDirtyUntil = 0;
+      var magNorthOffsetValue = -92;
+      var magNorthOffsetDirtyUntil = 0;
 
       // 工具栏只创建一次，避免定时重绘时替换 select 导致无法操作
       function buildToolbar() {
@@ -316,6 +329,35 @@
           }
         });
 
+        var reportedMagNorth = (n && n.state && n.state.compass && n.state.compass.mag_north_offset != null)
+          ? Number(n.state.compass.mag_north_offset) : localMagNorthOffset(d);
+        magNorthOffsetValue = reportedMagNorth;
+        var magNorthInput = U.el('input', {
+          type: 'number', step: '0.1', value: magNorthOffsetValue,
+          style: { width: '84px' }, 'data-mag-north-offset': '1', title: '磁北校正（MAG_NORTH_OFFSET）',
+          oninput: function () {
+            magNorthOffsetValue = Number(this.value);
+            magNorthOffsetDirtyUntil = Date.now() + 5000;
+          }
+        });
+        var magNorthBtn = U.el('button.btn.sm.primary', {
+          text: '应用',
+          onclick: function () {
+            var v = Number(magNorthInput.value);
+            if (!isFinite(v)) { ESP.ui.toast('请输入有效角度', 'err'); return; }
+            if (!d) { ESP.ui.toast('请先选择设备', 'err'); return; }
+            magNorthOffsetValue = v;
+            magNorthOffsetDirtyUntil = Date.now() + 5000;
+            setLocalMagNorthOffset(d, v);
+            ESP.devices.invoke(d.id, 'compass.set_mag_north_offset', { degrees: v }).then(function () {
+              ESP.ui.toast('磁北校正已设为 ' + v + '°', 'ok');
+              if (n && n.transport) n.transport.refresh();
+            }).catch(function (e) {
+              ESP.ui.toast('下发失败：' + e.message, 'err');
+            });
+          }
+        });
+
         return U.el('div.card', { style: { marginBottom: '14px' } }, [
           U.el('div.card-head', {}, [
             U.el('h3', { text: '监控设置' }),
@@ -330,6 +372,9 @@
             ]),
             U.el('div.row', { style: { gap: '8px' } }, [
               U.el('span.small.muted', { text: '磁偏角/角度补偿 °（指南针）' }), offsetInput, offsetBtn
+            ]),
+            U.el('div.row', { style: { gap: '8px' } }, [
+              U.el('span.small.muted', { text: '磁北校正 °（MAG_NORTH_OFFSET）' }), magNorthInput, magNorthBtn
             ])
           ])
         ]);
@@ -584,6 +629,13 @@
           var reported = Number(state.compass.offset);
           offsetEl.value = reported;
           headingOffsetValue = reported;
+        }
+        var magNorthEl = document.querySelector('[data-mag-north-offset]');
+        if (magNorthEl && document.activeElement !== magNorthEl && Date.now() > magNorthOffsetDirtyUntil &&
+            state && state.compass && state.compass.mag_north_offset != null) {
+          var reportedMag = Number(state.compass.mag_north_offset);
+          magNorthEl.value = reportedMag;
+          magNorthOffsetValue = reportedMag;
         }
 
         if (isSim) {
